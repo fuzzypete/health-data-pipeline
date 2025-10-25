@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "health-pipeline"
+version = "0.1.0"
+description = "Personal health data pipeline using HAE and Concept2."
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "health_pipeline"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = ">=2,<3"
+pandas = ">=2.2"
+pyarrow = ">=16.1"
+dask = {extras = ["dataframe"], version = "^2023.12.1"}
+python-dotenv = "^1.0.0"
+requests = "^2.31.0"
+click = "^8.1.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.2"
+black = "^24.10.0"
+ruff = "^0.6.9"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = "."

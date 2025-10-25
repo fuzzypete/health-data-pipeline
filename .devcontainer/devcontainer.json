@@ -1,0 +1,24 @@
+{
+  "name": "Health Data Pipeline Dev",
+  "dockerFile": "../Dockerfile",
+  "remoteUser": "root",
+  "workspaceFolder": "/app",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind,consistency=cached",
+  "mounts": [
+    "source=${localWorkspaceFolder}/Data,target=/app/Data,type=bind,consistency=cached"
+  ],
+  "runArgs": [
+    "--env-file",
+    "${localWorkspaceFolder}/.env"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
+}
