@@ -3,8 +3,9 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datetime import datetime
-from health_pipeline.common import (DATA_RAW_CSV_DIR, MINUTE_FACTS_PATH, DATA_ARCHIVE_CSV_DIR, minute_facts_schema, PARQUET_COMPRESSION)
-from health_pipeline.ingest.utils import clean_column_names, convert_to_utc
+from pipeline.common.schema import SOURCES, minute_facts_base
+from pipeline.paths import MINUTE_FACTS_PATH
+from pipeline.ingest.utils import clean_column_names, convert_to_utc
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def process_single_csv(csv_path: str) -> bool:

@@ -1,5 +1,5 @@
 import pandas as pd
-from health_pipeline.common import LOCAL_TIMEZONE_STR
+from pipeline.common import LOCAL_TIMEZONE_STR
 
 _EXPLICIT_MAP = {
     'Active Energy (kcal)': 'active_energy_kcal',

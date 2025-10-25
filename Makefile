@@ -32,13 +32,13 @@ test:
 	poetry run pytest -q
 
 run:
-	poetry run python -m health_pipeline.ingest.csv_delta
+	poetry run python -m pipeline.ingest.csv_delta
 
 ingest:
-	poetry run python -m health_pipeline.ingest.csv_delta
+	poetry run python -m pipeline.ingest.csv_delta
 
 validate:
-	poetry run python -c "from health_pipeline.validate.checks import validate_temporal_integrity as v; v()"
+	poetry run python -c "from pipeline.validate.checks import validate_temporal_integrity as v; v()"
 
 image:
 	docker build -t hdp:dev .

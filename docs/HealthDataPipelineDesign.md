@@ -1,9 +1,7 @@
 # Health Data Pipeline — Design (Source of Truth)
 
-## Schemas
-- `minute_facts` partitioned by `date_utc` with PK `timestamp_utc`
-- `daily_summary` partitioned by `date` (lenient emission)
-- Future: workout tables (header/splits/samples)
+**Schema Reference**
+The canonical storage schema is maintained in `HealthDataPipelineSchema.md`.
 
 ## Algorithms
 - Column normalization: explicit HAE→canonical mappings + snake_case fallback

@@ -1,5 +1,5 @@
 import pandas as pd
-from health_pipeline.common import LOCAL_TIMEZONE_STR
+from pipeline.common import LOCAL_TIMEZONE_STR
 
 def clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=lambda c: c.strip().lower().replace(' ', '_'))

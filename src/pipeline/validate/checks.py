@@ -1,7 +1,7 @@
 import logging
 import pyarrow.dataset as ds
 import pandas as pd
-from health_pipeline.common import MINUTE_FACTS_PATH
+from pipeline.paths import MINUTE_FACTS_PATH
 
 log = logging.getLogger('validate')
 
