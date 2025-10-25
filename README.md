@@ -13,3 +13,9 @@ poetry run python -m health_pipeline.ingest.csv_delta
 ## Docs (Markdown is Source of Truth)
 - Architecture: `docs/HealthDataPipelineArchitecture.md`
 - Design: `docs/HealthDataPipelineDesign.md`
+
+
+## Pipeline Outputs
+- Data/Parquet/minute_facts/
+- Data/Parquet/daily_summary/ (wide daily; includes water_fl_oz INT, imperial)
+- Data/Parquet/workouts/

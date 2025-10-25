@@ -16,3 +16,8 @@ The canonical storage schema is maintained in `HealthDataPipelineSchema.md`.
 - Inputs: Data/Raw/CSV/HealthAutoExport-*.csv
 - Outputs: Data/Parquet/{minute_facts,daily_summary}/...
 - Archive/Error routing
+
+
+### Daily Summary (wide)
+- Write row if at least one metric exists; skip only if all missing.
+- Units: imperial for hydration (`water_fl_oz` INT).

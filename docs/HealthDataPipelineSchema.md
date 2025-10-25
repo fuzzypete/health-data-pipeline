@@ -69,3 +69,9 @@ Allowed `source` values: `HAE_CSV`, `HAE_JSON`, `Concept2`.
 | Version | Date       | Changes |
 |---------|------------|---------|
 | v1.2    | 2025-10-24 | Wide→Wide minute_facts; added lineage fields; date+source partitions; clarified PKs. |
+
+
+### daily_summary additions
+- `water_fl_oz` (INT, imperial)
+- Derived: sleep_efficiency_pct, energy_total_kcal, net_energy_kcal (guarded)
+- Wide-table write rule: write if >=1 metric exists; skip only if all missing
