@@ -15,6 +15,7 @@ dask = {extras = ["dataframe"], version = "^2023.12.1"}
 python-dotenv = "^1.0.0"
 requests = "^2.31.0"
 click = "^8.1.7"
+pyyaml = "^6.0.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
