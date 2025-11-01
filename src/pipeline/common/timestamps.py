@@ -117,11 +117,18 @@ def apply_strategy_b(
     
     # 2. Localize to actual timezone from source
     tz = ZoneInfo(tz_name)
-    timestamp_local = timestamp_local.tz_localize(
-        tz,
-        ambiguous='infer',
-        nonexistent='shift_forward'
-    )
+    
+    # For individual timestamps (not Series), ambiguous must be bool or 'NaT'/'raise'
+    # Use False to prefer standard time (first occurrence during DST fall-back)
+    try:
+        timestamp_local = timestamp_local.tz_localize(
+            tz,
+            ambiguous=False,  # Prefer standard time for ambiguous times
+            nonexistent='shift_forward'  # Shift forward for nonexistent times (DST spring)
+        )
+    except Exception as e:
+        log.error(f"Failed to localize {timestamp_str} to {tz_name}: {e}")
+        raise
     
     # 3. Convert to UTC
     timestamp_utc = timestamp_local.tz_convert('UTC')
@@ -152,9 +159,14 @@ def handle_dst_ambiguous(
         Localized timestamp with ambiguity resolved
     """
     try:
+        # For individual timestamps, ambiguous must be bool
+        # False = prefer standard time (earlier/first occurrence)
+        # True = prefer daylight time (later/second occurrence)
+        ambiguous_param = (prefer == 'later')
+        
         return timestamp.tz_localize(
             timezone,
-            ambiguous=(prefer == 'earlier'),
+            ambiguous=ambiguous_param,
             nonexistent='shift_forward'
         )
     except Exception as e:

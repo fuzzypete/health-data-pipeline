@@ -1,0 +1,68 @@
+# Health Data Pipeline Configuration
+# Copy this to config.yaml and fill in your values
+
+# Timezone configuration
+timezone:
+  # Your home timezone for Strategy A ingestion (HAE CSV/JSON)
+  # Used for minute_facts and daily_summary
+  default: "America/Los_Angeles"
+  
+  # Optional: Historical timezone changes (if you moved)
+  # changes:
+  #   - before: "2025-06-01"
+  #     timezone: "America/Los_Angeles"
+  #     notes: "Seattle era"
+  #   - after: "2025-06-01"
+  #     timezone: "America/Chicago"
+  #     notes: "Moved to Austin"
+  
+  # Optional: Known travel periods (for filtering in analysis)
+  # travel_periods:
+  #   - start: "2025-03-15"
+  #     end: "2025-03-22"
+  #     timezone: "Europe/London"
+  #     notes: "London vacation"
+
+# API configuration
+api:
+  concept2:
+    # Get your token from: https://log.concept2.com/developers
+    token: "YOUR_CONCEPT2_API_TOKEN_HERE"
+    base_url: "https://log.concept2.com/api/"
+  
+  # Future APIs can be added here
+  # apple_health:
+  #   ...
+
+# Data directory paths
+data:
+  raw_dir: "Data/Raw"
+  parquet_dir: "Data/Parquet"
+  archive_dir: "Data/Archive"
+  error_dir: "Data/Error"
+
+# Ingestion settings
+ingestion:
+  # Batch size for API pagination
+  batch_size: 50
+  
+  # Retry configuration for API calls
+  max_retries: 3
+  retry_delay_seconds: 5
+  
+  # Archive processed files after successful ingestion
+  archive_after_ingest: true
+
+# Logging configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "pipeline.log"  # Set to null to disable file logging
+
+# Validation settings
+validation:
+  # Run validation checks after ingestion
+  enabled: true
+  
+  # Fail on validation errors (vs. just warn)
+  strict: false
