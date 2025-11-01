@@ -1,0 +1,415 @@
+================================================================================
+CONCEPT2 API EXPLORATION
+================================================================================
+
+1. Fetching user info...
+Status: 200
+{
+  "data": {
+    "id": 1743419,
+    "username": "pwickersham@gmail.com",
+    "first_name": "Peter",
+    "last_name": "Wickersham",
+    "gender": "M",
+    "dob": "1969-02-10",
+    "email": "pwickersham@gmail.com",
+    "country": "USA",
+    "profile_image": null,
+    "age_restricted": false,
+    "email_permission": false,
+    "health_data_permission": true,
+    "max_heart_rate": 166,
+    "weight": 6998,
+    "roles": [],
+    "logbook_privacy": "partners"
+  }
+}
+
+================================================================================
+2. Fetching recent workouts...
+================================================================================
+Status: 200
+
+Found 50 workouts
+
+--------------------------------------------------------------------------------
+First workout summary structure:
+--------------------------------------------------------------------------------
+{
+  "id": 107839572,
+  "user_id": 1743419,
+  "date": "2025-10-30 13:58:00",
+  "timezone": "America/Los_Angeles",
+  "date_utc": "2025-10-30 20:58:00",
+  "distance": 1900,
+  "type": "rower",
+  "time": 6000,
+  "time_formatted": "10:00.0",
+  "workout_type": "FixedTimeSplits",
+  "source": "ErgData iOS",
+  "weight_class": "H",
+  "verified": true,
+  "ranked": false,
+  "comments": "2.2",
+  "privacy": "partners",
+  "stroke_data": true,
+  "calories_total": 99,
+  "drag_factor": 118,
+  "stroke_count": 190,
+  "stroke_rate": 19,
+  "heart_rate": {
+    "min": 89,
+    "average": 105,
+    "max": 109,
+    "ending": 105
+  },
+  "workout": {
+    "targets": {
+      "heart_rate_zone": 3
+    },
+    "splits": [
+      {
+        "time": 1200,
+        "distance": 376,
+        "calories_total": 19,
+        "stroke_rate": 19,
+        "heart_rate": {
+          "min": 84,
+          "average": 97,
+          "max": 106,
+          "ending": 104
+        }
+      },
+      {
+        "time": 1200,
+        "distance": 381,
+        "calories_total": 20,
+        "stroke_rate": 19,
+        "heart_rate": {
+          "min": 103,
+          "average": 105,
+          "max": 107,
+          "ending": 107
+        }
+      },
+      {
+        "time": 1200,
+        "distance": 380,
+        "calories_total": 20,
+        "stroke_rate": 19,
+        "heart_rate": {
+          "min": 104,
+          "average": 106,
+          "max": 109,
+          "ending": 106
+        }
+      },
+      {
+        "time": 1200,
+        "distance": 382,
+        "calories_total": 20,
+        "stroke_rate": 19,
+        "heart_rate": {
+          "min": 102,
+          "average": 104,
+          "max": 108,
+          "ending": 105
+        }
+      },
+      {
+        "time": 1200,
+        "distance": 381,
+        "calories_total": 20,
+        "stroke_rate": 19,
+        "heart_rate": {
+          "min": 105,
+          "average": 105,
+          "max": 108,
+          "ending": 105
+        }
+      }
+    ]
+  },
+  "real_time": null
+}
+
+================================================================================
+3. Fetching detailed data for workout 107839572...
+================================================================================
+Status: 200
+
+Detailed workout data:
+{
+  "data": {
+    "id": 107839572,
+    "user_id": 1743419,
+    "date": "2025-10-30 13:58:00",
+    "timezone": "America/Los_Angeles",
+    "date_utc": "2025-10-30 20:58:00",
+    "distance": 1900,
+    "type": "rower",
+    "time": 6000,
+    "time_formatted": "10:00.0",
+    "workout_type": "FixedTimeSplits",
+    "source": "ErgData iOS",
+    "weight_class": "H",
+    "verified": true,
+    "ranked": false,
+    "comments": "2.2",
+    "privacy": "partners",
+    "stroke_data": true,
+    "calories_total": 99,
+    "drag_factor": 118,
+    "stroke_count": 190,
+    "stroke_rate": 19,
+    "heart_rate": {
+      "min": 89,
+      "average": 105,
+      "max": 109,
+      "ending": 105
+    },
+    "workout": {
+      "targets": {
+        "heart_rate_zone": 3
+      },
+      "splits": [
+        {
+          "time": 1200,
+          "distance": 376,
+          "calories_total": 19,
+          "stroke_rate": 19,
+          "heart_rate": {
+            "min": 84,
+            "average": 97,
+            "max": 106,
+            "ending": 104
+          }
+        },
+        {
+          "time": 1200,
+          "distance": 381,
+          "calories_total": 20,
+          "stroke_rate": 19,
+          "heart_rate": {
+            "min": 103,
+            "average": 105,
+            "max": 107,
+            "ending": 107
+          }
+        },
+        {
+          "time": 1200,
+          "distance": 380,
+          "calories_total": 20,
+          "stroke_rate": 19,
+          "heart_rate": {
+            "min": 104,
+            "average": 106,
+            "max": 109,
+            "ending": 106
+          }
+        },
+        {
+          "time": 1200,
+          "distance": 382,
+          "calories_total": 20,
+          "stroke_rate": 19,
+          "heart_rate": {
+            "min": 102,
+            "average": 104,
+            "max": 108,
+            "ending": 105
+          }
+        },
+        {
+          "time": 1200,
+          "distance": 381,
+          "calories_total": 20,
+          "stroke_rate": 19,
+          "heart_rate": {
+            "min": 105,
+            "average": 105,
+            "max": 108,
+            "ending": 105
+          }
+        }
+      ]
+    },
+    "real_time": null
+  }
+}
+
+================================================================================
+4. Checking for stroke/split data...
+================================================================================
+
+Trying: /users/me/results/107839572/strokes
+Status: 200
+
+✓ SUCCESS! Found granular data:
+{
+  "data": [
+    {
+      "d": 19,
+      "p": 2497,
+      "hr": 89,
+      "spm": 0,
+      "t": 9
+    },
+    {
+      "d": 91,
+      "p": 2166,
+      "hr": 91,
+      "spm": 20,
+      "t": 40
+    },
+    {
+      "d": 177,
+      "p": 1804,
+      "hr": 93,
+      "spm": 20,
+      "t": 71
+    },
+    {
+      "d": 269,
+      "p": 1674,
+      "hr": 93,
+      "spm": 20,
+      "t": 102
+    },
+    {
+      "d": 368,
+      "p": 1573,
+      "hr": 92,
+      "spm": 19,
+      "t": 133
+    },
+    {
+      "d": 466,
+      "p": 1573,
+      "hr": 92,
+      "spm": 19,
+      "t": 163
+    },
+    {
+      "d": 573,
+      "p": 1573,
+      "hr": 93,
+      "spm": 19,
+      "t": 196
+    },
+    {
+      "d": 671,
+      "p": 1560,
+      "hr": 94,
+      "spm": 20,
+      "t": 227
+    },
+    {
+      "d": 770,
+      "p": 1557,
+      "hr": 95,
+      "spm": 19,
+      "t": 258
+    },
+    {
+      "d": 868,
+      "p": 1557,
+      "hr": 96,
+      "spm": 19,
+      "t": 288
+    },
+    {
+      "d": 975,
+      "p": 1559,
+      "hr": 96,
+      "spm": 19,
+      "t": 321
+    },
+    {
+      "d": 1073,
+      "p": 1586,
+      "hr": 96,
+      "spm": 19,
+      "t": 352
+    },
+    {
+      "d": 1169,
+      "p": 1584,
+      "hr": 97,
+      "spm": 19,
+      "t": 383
+    },
+    {
+      "d": 1258,
+      "p": 1584,
+      "hr": 97,
+      "spm": 19,
+      "t": 411
+    },
+    {
+      "d": 1356,
+      "p": 1580,
+      "hr": 97,
+      "spm": 20,
+      "t": 442
+    },
+    {
+      "d": 1456,
+      "p": 1563,
+      "hr": 98,
+      "spm": 20,
+      "t": 473
+    },
+    {
+      "d": 1554,
+      "p": 1561,
+      "hr": 98,
+      "spm": 20,
+      "t": 504
+    },
+    {
+      "d": 1644,
+      "p": 1561,
+      "hr": 100,
+      "spm": 20,
+      "t": 532
+    },
+    {
+      "d": 1744,
+      "p": 1557,
+      "hr": 101,
+      "spm": 20,
+      "t": 563
+    },
+    {
+      "d": 1843,
+      "p": 1555,
+      "hr": 101,
+      "spm": 20,
+      "t": 594
+    },
+    {
+      "d": 1933,
+      "p": 1555,
+      "hr": 101,
+      "spm": 20,
+      "t": 622
+    },
+    {
+
+... (truncated)
+
+Trying: /users/me/results/107839572/splits
+Status: 404
+  → Endpoint not available
+
+Trying: /users/me/results/107839572/data
+Status: 404
+  → Endpoint not available
+
+================================================================================
+EXPLORATION COMPLETE
+================================================================================
+
+Save this output and share with Claude to design optimal schema.
