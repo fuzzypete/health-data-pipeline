@@ -23,7 +23,7 @@ def write_partitioned_dataset(
     table_path: Path,
     partition_cols: list[str],
     schema: Optional[pa.Schema] = None,
-    mode: str = 'overwrite_or_ignore',
+    mode: str = 'delete_matching',
 ):
     """
     Write DataFrame to partitioned Parquet dataset.
@@ -232,8 +232,7 @@ def upsert_by_key(
             combined_df,
             table_path,
             partition_cols,
-            schema,
-            mode='overwrite_or_ignore'
+            schema
         )
         
     except Exception as e:

@@ -433,7 +433,7 @@ def ingest_recent_workouts(
         # local date filtering (belt-and-suspenders)
         if from_date or to_date:
             workouts_combined["date_only"] = (
-                workouts_combined["start_time_utc"].dt.date
+                workouts_combined["start_time_local"].dt.date
             )
             if from_date:
                 f = pd.to_datetime(from_date).date()
