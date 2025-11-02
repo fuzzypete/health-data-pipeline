@@ -122,35 +122,61 @@ class Concept2Client:
                 log.error(f"Request failed after {self.max_retries} retries: {e}")
                 raise
     
+
     def get_recent_workouts(
         self,
-        limit: int = 50,
+        limit: int = None,  # Changed: None means fetch all
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
     ) -> list[dict]:
         """
-        Fetch recent workouts.
+        Fetch recent workouts with automatic pagination.
         
         Args:
-            limit: Number of workouts to fetch (max 50 per request)
+            limit: Max number of workouts to fetch (None = fetch all available)
             from_date: Start date (ISO format: YYYY-MM-DD)
             to_date: End date (ISO format: YYYY-MM-DD)
             
         Returns:
             List of workout dicts
         """
-        params = {'limit': min(limit, 50)}
-        if from_date:
-            params['from'] = from_date
-        if to_date:
-            params['to'] = to_date
+        all_workouts = []
+        page = 1
         
-        log.info(f"Fetching recent workouts (limit={limit}, from={from_date}, to={to_date})")
-        response = self._request('GET', '/users/me/results', params=params)
+        while True:
+            params = {'limit': 50, 'page': page}
+            if from_date:
+                params['from'] = from_date
+            if to_date:
+                params['to'] = to_date
+            
+            log.info(f"Fetching page {page} (limit=50, from={from_date}, to={to_date})")
+            response = self._request('GET', '/users/me/results', params=params)
+            
+            workouts = response.get('data', [])
+            all_workouts.extend(workouts)
+            
+            # Check pagination metadata
+            meta = response.get('meta', {})
+            pagination = meta.get('pagination', {})
+            total = pagination.get('total', 0)
+            current_page = pagination.get('current_page', page)
+            total_pages = pagination.get('total_pages', 1)
+            
+            log.info(f"Page {current_page}/{total_pages}: fetched {len(workouts)} workouts (total so far: {len(all_workouts)}/{total})")
+            
+            # Stop if we've reached the limit or there are no more pages
+            if limit and len(all_workouts) >= limit:
+                all_workouts = all_workouts[:limit]
+                break
+            
+            if current_page >= total_pages:
+                break
+            
+            page += 1
         
-        workouts = response.get('data', [])
-        log.info(f"Fetched {len(workouts)} workouts")
-        return workouts
+        log.info(f"Fetched {len(all_workouts)} total workouts")
+        return all_workouts
     
     def get_workout_strokes(self, workout_id: str) -> Optional[list[dict]]:
         """
@@ -432,7 +458,13 @@ def ingest_recent_workouts(
     counts = {'workouts': 0, 'splits': 0, 'strokes': 0}
     
     if all_workouts:
+        # After pd.concat, before upsert_by_key:
         workouts_combined = pd.concat(all_workouts, ignore_index=True)
+
+        # Ensure date partition column is int (YYYYMMDD format)
+        if 'date' in workouts_combined.columns:
+            workouts_combined['date'] = pd.to_datetime(workouts_combined['date']).dt.strftime('%Y%m%d').astype(int)
+
         workouts_combined = create_date_partition_column(workouts_combined, 'start_time_utc', 'date')
         
         upsert_by_key(

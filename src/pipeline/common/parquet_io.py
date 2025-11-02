@@ -189,6 +189,19 @@ def upsert_by_key(
     try:
         existing_df = read_partitioned_dataset(table_path)
         
+        # Normalize partition column types to match new_df (handles migration from old formats)
+        if not existing_df.empty:
+            for col in partition_cols:
+                if col in existing_df.columns and col in new_df.columns:
+                    target_dtype = new_df[col].dtype
+                    if existing_df[col].dtype != target_dtype:
+                        if col == 'date':
+                            # Normalize date column to string format (YYYY-MM-DD)
+                            existing_df[col] = pd.to_datetime(existing_df[col]).dt.strftime('%Y-%m-%d')
+                            log.debug(f"Converted existing '{col}' column to string format for schema compatibility")
+                        else:
+                            existing_df[col] = existing_df[col].astype(target_dtype)
+        
         if not existing_df.empty:
             # Filter to affected partitions
             mask = pd.Series([False] * len(existing_df))
@@ -282,8 +295,8 @@ def create_date_partition_column(
     if not pd.api.types.is_datetime64_any_dtype(df[timestamp_col]):
         df[timestamp_col] = pd.to_datetime(df[timestamp_col], utc=True)
     
-    # Extract date
-    df[partition_col] = df[timestamp_col].dt.date
+    # Extract date as string (YYYY-MM-DD format for Hive partitioning)
+    df[partition_col] = df[timestamp_col].dt.strftime('%Y-%m-%d')
     
     return df
 
