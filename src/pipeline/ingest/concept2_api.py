@@ -144,13 +144,16 @@ class Concept2Client:
         page = 1
         
         while True:
-            params = {'limit': 50, 'page': page}
+            params = {
+                "number": limit,   # NOT "limit"
+                "page": page,
+            }
             if from_date:
-                params['from'] = from_date
+                params["from"] = from_date
             if to_date:
-                params['to'] = to_date
-            
-            log.info(f"Fetching page {page} (limit=50, from={from_date}, to={to_date})")
+                params["to"] = to_date
+           
+            log.info(f"Fetching page {page} (limit={limit}, from={from_date}, to={to_date})")
             response = self._request('GET', '/users/me/results', params=params)
             
             workouts = response.get('data', [])
@@ -461,6 +464,20 @@ def ingest_recent_workouts(
         # After pd.concat, before upsert_by_key:
         workouts_combined = pd.concat(all_workouts, ignore_index=True)
 
+        # --- Apply local date filtering ---
+        if from_date or to_date:
+            workouts_combined['date_only'] = workouts_combined['start_time_utc'].dt.date
+
+            if from_date:
+                f = pd.to_datetime(from_date).date()
+                workouts_combined = workouts_combined[workouts_combined['date_only'] >= f]
+
+            if to_date:
+                t = pd.to_datetime(to_date).date()
+                workouts_combined = workouts_combined[workouts_combined['date_only'] <= t]
+
+            workouts_combined = workouts_combined.drop(columns=['date_only'])
+
         # Ensure date partition column is int (YYYYMMDD format)
         if 'date' in workouts_combined.columns:
             workouts_combined['date'] = pd.to_datetime(workouts_combined['date']).dt.strftime('%Y%m%d').astype(int)
@@ -529,10 +546,14 @@ def main():
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
+    if args.from_date or args.to_date:
+        effective_limit = None
+    else:
+        effective_limit = args.limit
     
     try:
         counts = ingest_recent_workouts(
-            limit=args.limit,
+            limit=effective_limit,
             from_date=args.from_date,
             to_date=args.to_date,
             fetch_strokes=not args.no_strokes,
