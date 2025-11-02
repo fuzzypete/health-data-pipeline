@@ -137,6 +137,9 @@ workouts_schema = pa.schema([
     # Lineage
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field
+    pa.field("date", pa.date32(), nullable=True),
 ])
 
 
@@ -166,6 +169,9 @@ cardio_splits_schema = pa.schema([
     pa.field("source", pa.string(), nullable=False),  # Always 'Concept2'
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field
+    pa.field("date", pa.date32(), nullable=True),
 ])
 
 
@@ -190,6 +196,9 @@ cardio_strokes_schema = pa.schema([
     pa.field("source", pa.string(), nullable=False),  # Always 'Concept2'
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field
+    pa.field("date", pa.date32(), nullable=True),
 ])
 
 
@@ -224,6 +233,9 @@ resistance_sets_schema = pa.schema([
     pa.field("source", pa.string(), nullable=False),  # Always 'JEFIT'
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field
+    pa.field("date", pa.date32(), nullable=True),
 ])
 
 

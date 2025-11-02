@@ -24,20 +24,24 @@ def write_partitioned_dataset(
     partition_cols: list[str],
     schema: Optional[pa.Schema] = None,
     mode: str = 'overwrite_or_ignore',
-) -> None:
+):
     """
     Write DataFrame to partitioned Parquet dataset.
-    
-    Standard write operation for all tables in the pipeline.
-    Uses Hive-style partitioning with snappy compression.
-    
+
+    Uses Hive-style partitioning with Snappy compression.
+
     Args:
         df: DataFrame to write
         table_path: Root path for the table (e.g., Data/Parquet/minute_facts)
         partition_cols: Columns to partition by (e.g., ['date', 'source'])
         schema: Optional PyArrow schema for validation
-        mode: Write mode - 'overwrite_or_ignore', 'append', 'overwrite'
-        
+        mode: Write mode — one of:
+            - 'overwrite_or_ignore' → safe overwrite-or-skip (default)
+            - 'delete_matching'     → delete matching partitions first (true overwrite)
+            - 'error'               → fail if existing data is present
+            - 'append'              → treated as 'overwrite_or_ignore' for now
+              (PyArrow no longer supports a separate append mode)
+
     Example:
         >>> df['date'] = pd.to_datetime(df['timestamp_utc']).dt.date
         >>> write_partitioned_dataset(
@@ -71,12 +75,22 @@ def write_partitioned_dataset(
     else:
         table = pa.Table.from_pandas(df, preserve_index=False)
     
+    # Defensively normalize old mode names (append/overwrite) to PyArrow’s supported ones.
+    mode_map = {
+        "append": "overwrite_or_ignore",      # legacy synonym for safe append
+        "overwrite": "overwrite_or_ignore",   # replace or skip existing rows
+        "overwrite_or_ignore": "overwrite_or_ignore",
+        "delete_matching": "delete_matching",
+        "error": "error",
+    }
+    pa_mode = mode_map.get(mode, "overwrite_or_ignore")
+
     # Write with partitioning
     pq.write_to_dataset(
         table,
         root_path=str(table_path),
         partition_cols=partition_cols,
-        existing_data_behavior=mode,
+        existing_data_behavior=pa_mode,
         compression='snappy',
     )
     
@@ -206,7 +220,7 @@ def upsert_by_key(
             table_path,
             partition_cols,
             schema,
-            mode='overwrite'
+            mode='overwrite_or_ignore'
         )
         
     except Exception as e:
