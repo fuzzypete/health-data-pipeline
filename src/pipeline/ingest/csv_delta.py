@@ -230,16 +230,19 @@ def _build_daily_summary(
             parts.append(midnight_df[["date_utc"] + daily_pick_cols])
 
     # Fallback: aggregation
+    def safe_max(x):
+        return x.max() if x.notna().any() else np.nan
+
     agg_map = {}
     for c in daily_pick_cols:
         if c not in df.columns:
             continue
         if c in {"steps", "flights_climbed", "distance_mi",
-                 "active_energy_kcal", "basal_energy_kcal", "calories_kcal",
-                 "sleep_minutes_asleep", "sleep_minutes_in_bed"}:
-            agg_map[c] = pd.NamedAgg(column=c, aggfunc=lambda x: x.max() if x.notna().any() else np.nan)
+                "active_energy_kcal", "basal_energy_kcal", "calories_kcal",
+                "sleep_minutes_asleep", "sleep_minutes_in_bed"}:
+            agg_map[c] = safe_max
         else:
-            agg_map[c] = pd.NamedAgg(column=c, aggfunc="mean")
+            agg_map[c] = "mean"
 
     g = df.groupby("date_utc", as_index=False)
     if agg_map:
