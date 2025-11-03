@@ -19,13 +19,19 @@ PARQUET_ROOT = config.get_data_dir('parquet')       # Data/Parquet/
 ARCHIVE_ROOT = config.get_data_dir('archive')       # Data/Archive/
 ERROR_ROOT = config.get_data_dir('error')           # Data/Error/
 
-# Raw data directories by source
-RAW_CSV_DIR = RAW_ROOT / "CSV"
-RAW_JSON_DIR = RAW_ROOT / "JSON"
+# Raw data directories - organized by source
+RAW_HAE_DIR = RAW_ROOT / "HAE"
+RAW_HAE_CSV_DIR = RAW_HAE_DIR / "CSV"
+RAW_HAE_JSON_DIR = RAW_HAE_DIR / "JSON"
+RAW_JEFIT_DIR = RAW_ROOT / "JEFIT"
+RAW_CONCEPT2_DIR = RAW_ROOT / "Concept2"
 
-# Archive directories by source
-ARCHIVE_CSV_DIR = ARCHIVE_ROOT / "CSV"
-ARCHIVE_JSON_DIR = ARCHIVE_ROOT / "JSON"
+# Archive directories - organized by source
+ARCHIVE_HAE_DIR = ARCHIVE_ROOT / "HAE"
+ARCHIVE_HAE_CSV_DIR = ARCHIVE_HAE_DIR / "CSV"
+ARCHIVE_HAE_JSON_DIR = ARCHIVE_HAE_DIR / "JSON"
+ARCHIVE_JEFIT_DIR = ARCHIVE_ROOT / "JEFIT"
+ARCHIVE_CONCEPT2_DIR = ARCHIVE_ROOT / "Concept2"
 
 # Parquet table paths
 MINUTE_FACTS_PATH = PARQUET_ROOT / "minute_facts"
@@ -37,10 +43,14 @@ RESISTANCE_SETS_PATH = PARQUET_ROOT / "resistance_sets"
 
 # Create directories on import
 for path in [
-    RAW_CSV_DIR,
-    RAW_JSON_DIR,
-    ARCHIVE_CSV_DIR,
-    ARCHIVE_JSON_DIR,
+    RAW_HAE_CSV_DIR,
+    RAW_HAE_JSON_DIR,
+    RAW_JEFIT_DIR,
+    RAW_CONCEPT2_DIR,
+    ARCHIVE_HAE_CSV_DIR,
+    ARCHIVE_HAE_JSON_DIR,
+    ARCHIVE_JEFIT_DIR,
+    ARCHIVE_CONCEPT2_DIR,
     ERROR_ROOT,
 ]:
     path.mkdir(parents=True, exist_ok=True)
@@ -51,10 +61,20 @@ __all__ = [
     "PARQUET_ROOT",
     "ARCHIVE_ROOT",
     "ERROR_ROOT",
-    "RAW_CSV_DIR",
-    "RAW_JSON_DIR",
-    "ARCHIVE_CSV_DIR",
-    "ARCHIVE_JSON_DIR",
+    # HAE paths
+    "RAW_HAE_DIR",
+    "RAW_HAE_CSV_DIR",
+    "RAW_HAE_JSON_DIR",
+    "ARCHIVE_HAE_DIR",
+    "ARCHIVE_HAE_CSV_DIR",
+    "ARCHIVE_HAE_JSON_DIR",
+    # JEFIT paths
+    "RAW_JEFIT_DIR",
+    "ARCHIVE_JEFIT_DIR",
+    # Concept2 paths
+    "RAW_CONCEPT2_DIR",
+    "ARCHIVE_CONCEPT2_DIR",
+    # Parquet table paths
     "MINUTE_FACTS_PATH",
     "DAILY_SUMMARY_PATH",
     "WORKOUTS_PATH",

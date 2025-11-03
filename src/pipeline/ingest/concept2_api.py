@@ -32,8 +32,8 @@ log = logging.getLogger(__name__)
 # Map Concept2 erg types to workout types
 ERG_TYPE_MAP = {
     "rower": "Rowing",
-    "bikeerg": "Cycling",
-    "skierg": "Skiing",
+    "bike": "Cycling",  # API returns "bike", not "bikeerg"
+    "ski": "Skiing",    # API returns "ski", not "skierg"
 }
 
 
