@@ -304,9 +304,7 @@ def ingest_jefit_csv(csv_path: Path) -> dict[str, int]:
     )
     
     if not workouts_df.empty:
-        workouts_df = create_date_partition_column(
-            workouts_df, 'start_time_utc', 'date'
-        )
+        workouts_df = create_date_partition_column(workouts_df, 'start_time_utc', 'date', 'M')
         
         upsert_by_key(
             workouts_df,
@@ -324,9 +322,7 @@ def ingest_jefit_csv(csv_path: Path) -> dict[str, int]:
     )
     
     if not sets_df.empty:
-        sets_df = create_date_partition_column(
-            sets_df, 'workout_start_utc', 'date'
-        )
+        sets_df = create_date_partition_column(sets_df, 'workout_start_utc', 'date', 'M')
         
         upsert_by_key(
             sets_df,

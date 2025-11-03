@@ -92,6 +92,7 @@ def write_partitioned_dataset(
         partition_cols=partition_cols,
         existing_data_behavior=pa_mode,
         compression='snappy',
+        max_partitions=2048, 
     )
     
     log.info(f"Wrote {len(df)} rows to {table_path} (partitions: {partition_cols})")
@@ -273,32 +274,57 @@ def create_date_partition_column(
     df: pd.DataFrame,
     timestamp_col: str = 'timestamp_utc',
     partition_col: str = 'date',
+    period: str = 'D',
 ) -> pd.DataFrame:
     """
     Create date partition column from timestamp.
     
     Converts a UTC timestamp to date for use as partition key.
+    Supports both daily and monthly partitioning.
     
     Args:
         df: DataFrame with timestamp column
         timestamp_col: Name of timestamp column
         partition_col: Name of partition column to create
+        period: Pandas period code - 'D' for daily (default), 'M' for monthly
         
     Returns:
         DataFrame with added partition column
+        
+    Examples:
+        Daily partitioning (Concept2 workouts):
+        >>> create_date_partition_column(df, 'start_time_utc', 'date', 'D')
+        # Creates: '2024-10-15'
+        
+        Monthly partitioning (Jefit workouts):
+        >>> create_date_partition_column(df, 'start_time_utc', 'date', 'M')
+        # Creates: '2024-10-01' (first day of month)
     """
     if timestamp_col not in df.columns:
         raise ValueError(f"Timestamp column '{timestamp_col}' not found")
     
-    # Ensure timestamp is datetime
+    # Ensure timestamp is datetime (coerce to UTC if needed)
     if not pd.api.types.is_datetime64_any_dtype(df[timestamp_col]):
         df[timestamp_col] = pd.to_datetime(df[timestamp_col], utc=True)
     
-    # Extract date as string (YYYY-MM-DD format for Hive partitioning)
-    df[partition_col] = df[timestamp_col].dt.strftime('%Y-%m-%d')
+    if period == 'M':
+        # Monthly: convert to period, then to first day of month
+        # This ensures all workouts in a month share the same partition key
+        # Note: TZ info is dropped during to_period() but restored by to_timestamp()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', 'Converting to PeriodArray/Index representation will drop timezone information')
+            df[partition_col] = (
+                df[timestamp_col]
+                .dt.to_period('M')
+                .dt.to_timestamp()  # Returns first day of month
+                .dt.strftime('%Y-%m-%d')
+            )
+    else:
+        # Daily (default): extract date as YYYY-MM-DD
+        df[partition_col] = df[timestamp_col].dt.strftime('%Y-%m-%d')
     
     return df
-
 
 def get_existing_partitions(table_path: Path) -> list[dict]:
     """
