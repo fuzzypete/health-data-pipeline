@@ -86,14 +86,25 @@ drop-parquet:
 # Drop Parquet directory, then rerun all ingestion targets
 reload: drop-parquet all
 
-# Create a zipped snapshot of the repo (excluding .git and tmp/)
+# Create a zipped snapshot of the source (code + config only)
 zipsrc:
 	@mkdir -p tmp
 	@ts=$$(date +"%Y%m%d-%H%M"); \
 	out="tmp/health-data-pipeline-src-$$ts.zip"; \
 	echo "Creating $$out..."; \
-	zip -r "$$out" . -x "*.git*" "tmp/*" "__pycache__/*" "*.pyc"
-	@echo "✅ Source archive created in tmp/"
+	zip -r "$$out" . \
+		-x "*.git*" \
+		-x "tmp/*" \
+		-x "__pycache__/*" \
+		-x "*.pyc" \
+		-x "Data/*" \
+		-x "out/*" \
+		-x "Raw/*" \
+		-x "*.parquet" \
+		-x "*.csv" \
+		-x "*.json" \
+		-x "*.log"
+	@echo "✅ Source-only archive created in tmp/"
 
 ### ------------------------------------------------------------
 ### Help
