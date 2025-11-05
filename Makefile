@@ -139,3 +139,9 @@ help:
 	@echo "Utilities:"
 	@echo "  zipsrc           - zip source into ./tmp/"
 	@echo "  drop-parquet     - remove $(PARQUET_DIR) (requires CONFIRM=1)"
+
+
+# Backward-compatible shim; prefer `make ingest-hae`
+ingest-hae:
+	@echo "Deprecated: use make ingest-hae";
+	$(MAKE) ingest-hae
