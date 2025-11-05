@@ -274,7 +274,7 @@ def create_date_partition_column(
     df: pd.DataFrame,
     timestamp_col: str = 'timestamp_utc',
     partition_col: str = 'date',
-    period: str = 'D',
+    period: str = 'M',
 ) -> pd.DataFrame:
     """
     Create date partition column from timestamp.

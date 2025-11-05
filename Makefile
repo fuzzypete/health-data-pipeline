@@ -1,7 +1,103 @@
 SHELL := /bin/bash
 
 .PHONY: help install lock lint fmt test run ingest validate image dev-shell
-.PHONY: ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
+.PHONY: ingest-hae ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
+.PHONY: all reload drop-parquet zipsrc show-ingest
+
+PYTHON       := poetry run python
+MODULE_ROOT  := pipeline.ingest
+PARQUET_DIR  := Data/Parquet
+INGEST_TARGETS ?= ingest-hae ingest-concept2-all
+
+install:
+	poetry install --with dev
+
+lock:
+	poetry lock --no-update
+
+lint:
+	ruff check .
+	black --check .
+
+fmt:
+	black .
+
+test:
+	pytest -q
+
+run:
+	$(PYTHON) -m $(MODULE_ROOT)
+
+validate:
+	$(PYTHON) -m $(MODULE_ROOT).validate
+
+image:
+	docker build -t hdp:dev .
+
+dev-shell:
+	poetry shell
+
+### ------------------------------------------------------------
+### Ingestion Targets
+### ------------------------------------------------------------
+
+ingest-hae:
+	$(PYTHON) -m $(MODULE_ROOT).hae_csv
+
+ingest-concept2:
+	$(PYTHON) -m $(MODULE_ROOT).concept2_api --limit 50
+
+ingest-concept2-recent:
+	$(PYTHON) -m $(MODULE_ROOT).concept2_api --limit 10
+
+ingest-concept2-all:
+	$(PYTHON) -m $(MODULE_ROOT).concept2_api --limit 200
+
+test-concept2:
+	$(PYTHON) -m $(MODULE_ROOT).concept2_api --test
+
+### ------------------------------------------------------------
+### Aggregates + Maintenance
+### ------------------------------------------------------------
+
+# Show which ingestion targets will run
+show-ingest:
+	@echo "INGEST_TARGETS => $(INGEST_TARGETS)"
+
+# Run every ingestion target listed in INGEST_TARGETS
+all: show-ingest
+	@set -e; \
+	for t in $(INGEST_TARGETS); do \
+		echo ""; \
+		echo "=== Running $$t ==="; \
+		$(MAKE) $$t; \
+	done
+	@echo ""; echo "✅ All ingestion completed."
+
+# Safety: require CONFIRM=1 before deleting Parquet directory
+drop-parquet:
+	@{ [ "$(CONFIRM)" = "1" ] || { \
+		echo "Refusing to remove $(PARQUET_DIR). Re-run with: make drop-parquet CONFIRM=1"; \
+		exit 1; }; }
+	@echo "Removing $(PARQUET_DIR)..."
+	@rm -rf -- "$(PARQUET_DIR)"
+	@echo "OK."
+
+# Drop Parquet directory, then rerun all ingestion targets
+reload: drop-parquet all
+
+# Create a zipped snapshot of the repo (excluding .git and tmp/)
+zipsrc:
+	@mkdir -p tmp
+	@ts=$$(date +"%Y%m%d-%H%M"); \
+	out="tmp/health-data-pipeline-src-$$ts.zip"; \
+	echo "Creating $$out..."; \
+	zip -r "$$out" . -x "*.git*" "tmp/*" "__pycache__/*" "*.pyc"
+	@echo "✅ Source archive created in tmp/"
+
+### ------------------------------------------------------------
+### Help
+### ------------------------------------------------------------
 
 help:
 	@echo "Targets:"
@@ -15,68 +111,20 @@ help:
 	@echo "  ingest-hae       - run HAE CSV ingestion"
 	@echo "  ingest-concept2  - ingest last 50 Concept2 workouts"
 	@echo "  ingest-concept2-recent - ingest last 10 workouts (quick)"
-	@echo "  ingest-concept2-all    - ingest last 200 workouts (slow!)"
+	@echo "  ingest-concept2-all    - ingest last 200 workouts (slow)"
+	@echo ""
+	@echo "Aggregates:"
+	@echo "  all              - run bundled ingestion targets ($(INGEST_TARGETS))"
+	@echo "  reload           - drop parquet and then run all (requires CONFIRM=1)"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test-concept2    - test Concept2 API connection and processing"
-	@echo "  validate         - run data validation checks"
+	@echo "  test-concept2    - test Concept2 API connection"
+	@echo "  validate         - run validation checks"
 	@echo ""
 	@echo "Docker:"
 	@echo "  image            - build Docker image (tag: hdp:dev)"
-	@echo "  dev-shell        - open poetry shell"
-
-install:
-	poetry install
-
-lock:
-	poetry lock
-
-lint:
-	poetry run ruff check .
-	poetry run black --check .
-
-fmt:
-	poetry run black .
-
-test:
-	poetry run pytest -q
-
-# HAE CSV ingestion (existing)
-ingest-hae:
-	poetry run python -m pipeline.ingest.csv_delta
-
-run: ingest-hae
-
-ingest: ingest-hae
-
-# Concept2 ingestion (NEW)
-ingest-concept2:
-	@echo "Ingesting last 50 Concept2 workouts..."
-	poetry run python -m pipeline.ingest.concept2_api --limit 50
-
-ingest-concept2-recent:
-	@echo "Ingesting last 10 Concept2 workouts (quick sync)..."
-	poetry run python -m pipeline.ingest.concept2_api --limit 10
-
-ingest-concept2-all:
-	@echo "Ingesting last 200 Concept2 workouts (this may take a while)..."
-	poetry run python -m pipeline.ingest.concept2_api --limit 200
-
-ingest-concept2-no-strokes:
-	@echo "Ingesting workouts without stroke data (faster)..."
-	poetry run python -m pipeline.ingest.concept2_api --limit 50 --no-strokes
-
-test-concept2:
-	@echo "Testing Concept2 API connection and data processing..."
-	poetry run python test_concept2.py
-
-# Validation
-validate:
-	poetry run python -c "from pipeline.validate.checks import validate_temporal_integrity as v; v()"
-
-# Docker
-image:
-	docker build -t hdp:dev .
-
-dev-shell:
-	poetry shell
+	@echo "  dev-shell        - poetry shell"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  zipsrc           - zip source into ./tmp/"
+	@echo "  drop-parquet     - remove $(PARQUET_DIR) (requires CONFIRM=1)"
