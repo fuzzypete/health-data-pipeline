@@ -18,8 +18,8 @@ def _hash_lab_id(date_str: str, lab_name: str) -> str:
     base = f"{date_str}__{lab_name}".encode("utf-8")
     return hashlib.sha1(base).hexdigest()[:16]
 
-def read_excel_wide(path: str) -> pd.DataFrame:
-    df = pd.read_excel(path)
+def read_excel_wide(path: str, sheet_name: str) -> pd.DataFrame:
+    df = pd.read_excel(path,sheet_name=sheet_name)
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
@@ -83,6 +83,7 @@ def write_parquet(df: pd.DataFrame):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", default=None, help="Path to labs Excel file. If not provided, auto-scans for latest Labs fetch in raw data dir.")
+    ap.add_argument("--sheet", default="Lab Results", help="Worksheet name or index to read")
     ap.add_argument("--run-id", default=None)
     args = ap.parse_args()
 
@@ -103,7 +104,7 @@ def main():
         print(f"❌ File not found: {input}")
         return 1
     
-    df_wide = read_excel_wide(input)
+    df_wide = read_excel_wide(input, sheet_name=args.sheet)
     df_long = melt_to_long(df_wide)
     if args.run_id:
         df_long["ingest_run_id"] = args.run_id
