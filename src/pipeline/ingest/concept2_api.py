@@ -473,14 +473,13 @@ def ingest_recent_workouts(
         )
         
         if not lactate_df.empty:
-            lactate_table = create_lactate_table(lactate_df)
-            lactate_table[]
-            lactate_table = create_date_partition_column(
-                lactate_table, "workout_start_utc", "date"
+            lactate_df = create_date_partition_column(
+                lactate_df, "workout_start_utc", "date"
             )
+            lactate_table = create_lactate_table(lactate_df)
             
             upsert_by_key(
-                lactate_table,
+                lactate_df,
                 LACTATE_PATH,
                 primary_key=["workout_id", "source"],
                 partition_cols=["date", "source"],

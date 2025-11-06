@@ -116,10 +116,6 @@ def extract_lactate_from_workouts(
     
     df = pd.DataFrame(records)
     
-    # Add date partition column
-    #df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-    df['date'] = workouts_df['date']
-    
     return df
 
 
