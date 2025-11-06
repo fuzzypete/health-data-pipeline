@@ -39,6 +39,7 @@ DAILY_SUMMARY_PATH = PARQUET_ROOT / "daily_summary"
 WORKOUTS_PATH = PARQUET_ROOT / "workouts"
 CARDIO_SPLITS_PATH = PARQUET_ROOT / "cardio_splits"
 CARDIO_STROKES_PATH = PARQUET_ROOT / "cardio_strokes"
+LACTATE_PATH = PARQUET_ROOT / "lactate"
 RESISTANCE_SETS_PATH = PARQUET_ROOT / "resistance_sets"
 
 # Create directories on import

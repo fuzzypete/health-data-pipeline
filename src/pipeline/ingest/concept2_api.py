@@ -25,7 +25,8 @@ from pipeline.common.parquet_io import (
     create_date_partition_column,
     upsert_by_key,
 )
-from pipeline.paths import WORKOUTS_PATH, CARDIO_SPLITS_PATH, CARDIO_STROKES_PATH
+from pipeline.common.lactate_extraction import extract_lactate_from_workouts, create_lactate_table
+from pipeline.paths import WORKOUTS_PATH, CARDIO_SPLITS_PATH, CARDIO_STROKES_PATH, LACTATE_PATH
 
 log = logging.getLogger(__name__)
 
@@ -253,6 +254,7 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         else None,
         "ranked": workout_json.get("ranked", False),
         "verified": workout_json.get("verified", False),
+        "notes" : workout_json.get("comments", ""),
         "has_splits": bool(workout_json.get("workout", {}).get("splits")),
         "has_strokes": workout_json.get("stroke_data", False),
         "ingest_time_utc": datetime.now(timezone.utc),
@@ -425,7 +427,7 @@ def ingest_recent_workouts(
             log.error(f"Failed to process workout {workout_json.get('id')}: {e}")
             continue
 
-    counts = {"workouts": 0, "splits": 0, "strokes": 0}
+    counts = {"workouts": 0, "splits": 0, "strokes": 0, 'lactate': 0}
 
     if all_workouts:
         workouts_combined = pd.concat(all_workouts, ignore_index=True)
@@ -461,6 +463,34 @@ def ingest_recent_workouts(
         )
         counts["workouts"] = len(workouts_combined)
         log.info(f"Wrote {counts['workouts']} workouts")
+
+        # ---- Extract lactate from comments ----  # 
+        log.info("Extracting lactate measurements from comments...")
+        lactate_df = extract_lactate_from_workouts(
+            workouts_combined,
+            ingest_run_id,
+            source="Concept2_Comment"
+        )
+        
+        if not lactate_df.empty:
+            lactate_table = create_lactate_table(lactate_df)
+            lactate_table[]
+            lactate_table = create_date_partition_column(
+                lactate_table, "workout_start_utc", "date"
+            )
+            
+            upsert_by_key(
+                lactate_table,
+                LACTATE_PATH,
+                primary_key=["workout_id", "source"],
+                partition_cols=["date", "source"],
+                schema=get_schema("lactate"),
+            )
+            counts["lactate"] = len(lactate_df)
+            log.info(f"Extracted {counts['lactate']} lactate measurements")
+        else:
+            counts["lactate"] = 0
+            log.info("No lactate measurements found in comments")
 
     if all_splits:
         splits_combined = pd.concat(all_splits, ignore_index=True)
@@ -535,6 +565,7 @@ def main():
         print(f"   Workouts: {counts['workouts']}")
         print(f"   Splits:   {counts['splits']}")
         print(f"   Strokes:  {counts['strokes']}")
+        print(f"   Lactate:  {counts['lactate']}")  
     except Exception as e:
         log.exception("Ingestion failed")
         print(f"\n❌ Ingestion failed: {e}")

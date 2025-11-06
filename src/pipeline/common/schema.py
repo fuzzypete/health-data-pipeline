@@ -238,6 +238,29 @@ resistance_sets_schema = pa.schema([
     pa.field("date", pa.string(), nullable=True),
 ])
 
+# ============================================================================
+# Lactate measurements
+# ============================================================================
+
+lactate_schema = pa.schema([
+    # Link to workout
+    pa.field("workout_id", pa.string(), nullable=False),
+    pa.field("workout_start_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    
+    # Measurement
+    pa.field("lactate_mmol", pa.float64(), nullable=False),  # mmol/L
+    pa.field("measurement_time_utc", pa.timestamp("us", tz="UTC"), nullable=True),
+    pa.field("measurement_context", pa.string(), nullable=True),  # e.g., "post-workout"
+    pa.field("notes", pa.string(), nullable=True),  # Original comment text
+    
+    # Lineage
+    pa.field("source", pa.string(), nullable=False),  # 'Concept2_Comment' or 'Manual'
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+    
+    # Hive partitioning
+    pa.field("date", pa.string(), nullable=True),
+])
 
 # ============================================================================
 # Schema registry (for convenience)
@@ -250,6 +273,7 @@ SCHEMAS = {
     'cardio_splits': cardio_splits_schema,
     'cardio_strokes': cardio_strokes_schema,
     'resistance_sets': resistance_sets_schema,
+    'lactate': lactate_schema, 
 }
 
 

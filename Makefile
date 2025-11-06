@@ -3,6 +3,7 @@ SHELL := /bin/bash
 .PHONY: help install lock lint fmt test run ingest validate image dev-shell
 .PHONY: ingest-hae ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
 .PHONY: all reload drop-parquet zipsrc show-ingest
+.PHONY: backfill-lactate
 
 PYTHON       := poetry run python
 MODULE_ROOT  := pipeline.ingest
@@ -142,6 +143,10 @@ help:
 
 
 # Backward-compatible shim; prefer `make ingest-hae`
-ingest-hae:
-	@echo "Deprecated: use make ingest-hae";
-	$(MAKE) ingest-hae
+#ingest-hae:
+#	@echo "Deprecated: use make ingest-hae";
+#	$(MAKE) ingest-hae
+
+backfill-lactate:
+	@echo "Backfilling lactate measurements from Concept2 comments..."
+	poetry run python scripts/backfill_lactate.py
