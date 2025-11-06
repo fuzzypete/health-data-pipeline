@@ -263,6 +263,28 @@ lactate_schema = pa.schema([
 ])
 
 # ============================================================================
+# Labs (normalized format)
+# ============================================================================
+
+labs_schema = pa.schema([
+    pa.field("lab_id", pa.string(), nullable=False),
+    pa.field("date", pa.date32(), nullable=False),
+    pa.field("lab_name", pa.string(), nullable=True),
+    pa.field("reason", pa.string(), nullable=True),
+    pa.field("marker", pa.string(), nullable=False),
+    pa.field("value", pa.float64(), nullable=True),
+    pa.field("value_text", pa.string(), nullable=True),
+    pa.field("unit", pa.string(), nullable=True),
+    pa.field("ref_low", pa.float64(), nullable=True),
+    pa.field("ref_high", pa.float64(), nullable=True),
+    pa.field("flag", pa.string(), nullable=True),
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+    pa.field("year", pa.string(), nullable=True),
+])
+
+# ============================================================================
 # Schema registry (for convenience)
 # ============================================================================
 
@@ -284,25 +306,3 @@ def get_schema(table_name: str) -> pa.Schema:
         raise ValueError(f"Unknown table: {table_name}. Available: {list(SCHEMAS.keys())}")
     return SCHEMAS[table_name]
 
-# ============================================================================
-# Labs (normalized format)
-# ============================================================================
-import pyarrow as pa
-
-labs_schema = pa.schema([
-    pa.field("lab_id", pa.string(), nullable=False),
-    pa.field("date", pa.date32(), nullable=False),
-    pa.field("lab_name", pa.string(), nullable=True),
-    pa.field("reason", pa.string(), nullable=True),
-    pa.field("marker", pa.string(), nullable=False),
-    pa.field("value", pa.float64(), nullable=True),
-    pa.field("value_text", pa.string(), nullable=True),
-    pa.field("unit", pa.string(), nullable=True),
-    pa.field("ref_low", pa.float64(), nullable=True),
-    pa.field("ref_high", pa.float64(), nullable=True),
-    pa.field("flag", pa.string(), nullable=True),
-    pa.field("source", pa.string(), nullable=False),
-    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
-    pa.field("ingest_run_id", pa.string(), nullable=True),
-    pa.field("year", pa.string(), nullable=True),
-])

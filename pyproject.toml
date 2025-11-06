@@ -19,6 +19,7 @@ pyyaml = "^6.0.3"
 google-api-python-client = "^2.187.0"
 google-auth = "^2.43.0"
 google-auth-httplib2 = "^0.2.1"
+openpyxl = "^3.1.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"

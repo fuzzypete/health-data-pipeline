@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-"""Excel to long-format labs ingester. See docs for schema details."""
 import argparse
 import hashlib
 from pathlib import Path
@@ -7,13 +5,14 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from pipeline.paths import LABS_PATH, RAW_LABS_DIR
+
 try:
     from pipeline.common.labs_normalization import parse_column_name, parse_lab_value, calculate_flag, get_reference_range
 except Exception:
     from src.pipeline.common.labs_normalization import parse_column_name, parse_lab_value, calculate_flag, get_reference_range  # type: ignore
 
-DEFAULT_INPUT = "Data/Raw/labs/latest.xlsx"
-DEFAULT_OUT = "Data/Parquet/labs"
+
 
 def _hash_lab_id(date_str: str, lab_name: str) -> str:
     base = f"{date_str}__{lab_name}".encode("utf-8")
@@ -77,24 +76,38 @@ def melt_to_long(df: pd.DataFrame) -> pd.DataFrame:
     cols = ["lab_id","date","lab_name","reason","marker","value","value_text","unit","ref_low","ref_high","flag","source","ingest_time_utc","ingest_run_id","year"]
     return long_df[cols]
 
-def write_parquet(df: pd.DataFrame, out_dir: str):
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+def write_parquet(df: pd.DataFrame):
     table = pa.Table.from_pandas(df)
-    pq.write_to_dataset(table, root_path=str(out), partition_cols=["year"])
+    pq.write_to_dataset(table, root_path=LABS_PATH, partition_cols=["year"])
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default=DEFAULT_INPUT)
-    ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--input", default=None, help="Path to labs Excel file. If not provided, auto-scans for latest Labs fetch in raw data dir.")
     ap.add_argument("--run-id", default=None)
     args = ap.parse_args()
 
-    df_wide = read_excel_wide(args.input)
+    # Determine which file to process
+    if args.input:
+        input = Path(args.input)
+    else:
+        # Auto-scan for latest LABS export
+        labs_files = list(RAW_LABS_DIR.glob("*.csv"))
+        if not labs_files:
+            print(f"❌ No Excel files found in {RAW_LABS_DIR}")
+            print(f"   Place LABS exports in this directory or specify path explicitly.")
+            return 1
+        input = max(labs_files, key=lambda p: p.stat().st_mtime)
+        log.info(f"Auto-detected latest Labs excel: {input.name}")
+    
+    if not input.exists():
+        print(f"❌ File not found: {input}")
+        return 1
+    
+    df_wide = read_excel_wide(input)
     df_long = melt_to_long(df_wide)
     if args.run_id:
         df_long["ingest_run_id"] = args.run_id
-    write_parquet(df_long, args.out)
+    write_parquet(df_long)
     print(f"Ingestion complete: {len(df_long['lab_id'].unique())} visits, {len(df_long)} results")
 
 if __name__ == "__main__":

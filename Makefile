@@ -171,8 +171,8 @@ HDP_FOLDER_ARG := $(if $(HDP_LABS_FOLDER_ID),--folder-id $(HDP_LABS_FOLDER_ID),)
 
 # Your project’s ingest command; override in .env if different
 # Example:
-#   HDP_LABS_INGEST_CMD=poetry run python -m health_pipeline.ingest.labs --input "$(HDP_OUT_LABS)"
-HDP_LABS_INGEST_CMD ?= poetry run python -m health_pipeline.ingest.labs --input "$(HDP_OUT_LABS)"
+#   HDP_LABS_INGEST_CMD=poetry run python -m pipeline.ingest.labs_excel --input "$(HDP_OUT_LABS)"
+HDP_LABS_INGEST_CMD ?= poetry run python -m pipeline.ingest.labs_excel --input "$(HDP_OUT_LABS)"
 
 .PHONY: labs.env labs.check labs.adc labs.fetch labs.fetch.id labs.fetch.any labs.ingest labs.all labs.clean
 

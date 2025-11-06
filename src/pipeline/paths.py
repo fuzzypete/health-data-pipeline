@@ -1,3 +1,5 @@
+#from __future__ import annotations
+
 from pathlib import Path
 DATA_DIR = Path('Data')
 """
@@ -5,7 +7,6 @@ Path definitions for Health Data Pipeline.
 
 All paths are derived from configuration (config.yaml or environment variables).
 """
-from __future__ import annotations
 
 from pathlib import Path
 
@@ -27,6 +28,7 @@ RAW_HAE_CSV_DIR = RAW_HAE_DIR / "CSV"
 RAW_HAE_JSON_DIR = RAW_HAE_DIR / "JSON"
 RAW_JEFIT_DIR = RAW_ROOT / "JEFIT"
 RAW_CONCEPT2_DIR = RAW_ROOT / "Concept2"
+RAW_LABS_DIR = RAW_ROOT / "labs"
 
 # Archive directories - organized by source
 ARCHIVE_HAE_DIR = ARCHIVE_ROOT / "HAE"
@@ -34,6 +36,7 @@ ARCHIVE_HAE_CSV_DIR = ARCHIVE_HAE_DIR / "CSV"
 ARCHIVE_HAE_JSON_DIR = ARCHIVE_HAE_DIR / "JSON"
 ARCHIVE_JEFIT_DIR = ARCHIVE_ROOT / "JEFIT"
 ARCHIVE_CONCEPT2_DIR = ARCHIVE_ROOT / "Concept2"
+ARCHIVE_LABS_DIR = ARCHIVE_ROOT / "labs"
 
 # Parquet table paths
 MINUTE_FACTS_PATH = PARQUET_ROOT / "minute_facts"
@@ -43,6 +46,7 @@ CARDIO_SPLITS_PATH = PARQUET_ROOT / "cardio_splits"
 CARDIO_STROKES_PATH = PARQUET_ROOT / "cardio_strokes"
 LACTATE_PATH = PARQUET_ROOT / "lactate"
 RESISTANCE_SETS_PATH = PARQUET_ROOT / "resistance_sets"
+LABS_PATH = PARQUET_ROOT / "labs"
 
 # Create directories on import
 for path in [
@@ -54,6 +58,7 @@ for path in [
     ARCHIVE_HAE_JSON_DIR,
     ARCHIVE_JEFIT_DIR,
     ARCHIVE_CONCEPT2_DIR,
+    ARCHIVE_LABS_DIR,
     ERROR_ROOT,
 ]:
     path.mkdir(parents=True, exist_ok=True)
@@ -77,6 +82,9 @@ __all__ = [
     # Concept2 paths
     "RAW_CONCEPT2_DIR",
     "ARCHIVE_CONCEPT2_DIR",
+    # Labs paths
+    "RAW_LABS_DIR",
+    "ARCHIVE_LABS_DIR",
     # Parquet table paths
     "MINUTE_FACTS_PATH",
     "DAILY_SUMMARY_PATH",
@@ -84,5 +92,5 @@ __all__ = [
     "CARDIO_SPLITS_PATH",
     "CARDIO_STROKES_PATH",
     "RESISTANCE_SETS_PATH",
+    "LABS_PATH",
 ]
-LABS_PATH = DATA_DIR / 'Parquet' / 'labs'
