@@ -150,3 +150,89 @@ help:
 backfill-lactate:
 	@echo "Backfilling lactate measurements from Concept2 comments..."
 	poetry run python scripts/backfill_lactate.py
+
+# Loads .env if present (keep your existing -include .env above)
+export
+
+# ---- Config (override in .env or on CLI) ----
+GOOGLE_APPLICATION_CREDENTIALS ?= ~/.config/healthdatapipeline/hdpfetcher-key.json
+
+HDP_LABS_FILE_NAME ?= AllLabsHistory.xlsx   # exact Drive filename (no folders)
+HDP_LABS_FILE_ID   ?=                       # optional: if set, bypasses name search
+HDP_LABS_FOLDER_ID ?=                       # optional: restrict search to a folder
+
+HDP_OUT_LABS ?= Data/Raw/labs/labs-master-latest.xlsx
+
+HDP_LABS_FILE_NAME := $(strip $(HDP_LABS_FILE_NAME))
+HDP_LABS_FOLDER_ID := $(strip $(HDP_LABS_FOLDER_ID))
+HDP_OUT_LABS       := $(strip $(HDP_OUT_LABS))
+
+HDP_FOLDER_ARG := $(if $(HDP_LABS_FOLDER_ID),--folder-id $(HDP_LABS_FOLDER_ID),)
+
+# Your project’s ingest command; override in .env if different
+# Example:
+#   HDP_LABS_INGEST_CMD=poetry run python -m health_pipeline.ingest.labs --input "$(HDP_OUT_LABS)"
+HDP_LABS_INGEST_CMD ?= poetry run python -m health_pipeline.ingest.labs --input "$(HDP_OUT_LABS)"
+
+.PHONY: labs.env labs.check labs.adc labs.fetch labs.fetch.id labs.fetch.any labs.ingest labs.all labs.clean
+
+labs.env:
+	@echo "GOOGLE_APPLICATION_CREDENTIALS=$(GOOGLE_APPLICATION_CREDENTIALS)"
+	@echo "HDP_LABS_FILE_NAME=$(HDP_LABS_FILE_NAME)"
+	@echo "HDP_LABS_FILE_ID=$(HDP_LABS_FILE_ID)"
+	@echo "HDP_LABS_FOLDER_ID=$(HDP_LABS_FOLDER_ID)"
+	@echo "HDP_OUT_LABS=$(HDP_OUT_LABS)"
+	@echo "HDP_LABS_INGEST_CMD=$(HDP_LABS_INGEST_CMD)"
+
+labs.check:
+	@test -n "$(GOOGLE_APPLICATION_CREDENTIALS)" && test -f "$(GOOGLE_APPLICATION_CREDENTIALS)" || ( \
+		echo "Missing SA key. Set GOOGLE_APPLICATION_CREDENTIALS to a valid file."; \
+		exit 1 )
+
+labs.adc: labs.check
+	@poetry run gcloud auth application-default print-access-token >/dev/null && echo "ADC OK"
+
+# Fetch by exact file name (recommended)
+labs.fetch: labs.check
+	@mkdir -p $(dir $(HDP_OUT_LABS))
+	poetry run python scripts/hdp_drive_fetcher.py \
+		--file-name "$(HDP_LABS_FILE_NAME)" \
+		$(HDP_FOLDER_ARG) \
+		--out "$(HDP_OUT_LABS)"
+	@echo "Saved -> $(HDP_OUT_LABS)"
+
+# Fetch by file ID (fastest; bypasses search)
+labs.fetch.id: labs.check
+	@test -n "$(HDP_LABS_FILE_ID)" || (echo "Set HDP_LABS_FILE_ID to a Drive file ID"; exit 1)
+	@mkdir -p $(dir $(HDP_OUT_LABS))
+	poetry run python scripts/hdp_drive_fetcher.py \
+		--file-id "$(HDP_LABS_FILE_ID)" \
+		--out "$(HDP_OUT_LABS)"
+	@echo "Saved -> $(HDP_OUT_LABS)"
+
+# Use whichever signal is provided (ID > name)
+labs.fetch.any:
+	@if [ -n "$(HDP_LABS_FILE_ID)" ]; then \
+		$(MAKE) labs.fetch.id; \
+	else \
+		$(MAKE) labs.fetch; \
+	fi
+
+# Ingest
+labs.ingest:
+	@test -f "$(HDP_OUT_LABS)" || (echo "Missing input file: $(HDP_OUT_LABS). Run 'make labs.fetch' first." && exit 1)
+	@echo "Ingesting $(HDP_OUT_LABS)…"
+	@$(HDP_LABS_INGEST_CMD)
+
+# End-to-end
+labs.all: labs.fetch.any labs.ingest
+
+# Clean local artifact
+labs.clean:
+	@rm -f "$(HDP_OUT_LABS)" && echo "Removed $(HDP_OUT_LABS)" || true
+
+.PHONY: labs.debug
+labs.debug:
+	@echo "HDP_LABS_FILE_NAME=[[$(HDP_LABS_FILE_NAME)]]"
+	@echo "HDP_LABS_FOLDER_ID=[[$(HDP_LABS_FOLDER_ID)]]"
+	@echo "HDP_OUT_LABS=[[$(HDP_OUT_LABS)]]"

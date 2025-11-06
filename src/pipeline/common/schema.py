@@ -267,6 +267,7 @@ lactate_schema = pa.schema([
 # ============================================================================
 
 SCHEMAS = {
+    'labs': labs_schema,
     'minute_facts': minute_facts_base,
     'daily_summary': daily_summary_schema,
     'workouts': workouts_schema,
@@ -282,3 +283,26 @@ def get_schema(table_name: str) -> pa.Schema:
     if table_name not in SCHEMAS:
         raise ValueError(f"Unknown table: {table_name}. Available: {list(SCHEMAS.keys())}")
     return SCHEMAS[table_name]
+
+# ============================================================================
+# Labs (normalized format)
+# ============================================================================
+import pyarrow as pa
+
+labs_schema = pa.schema([
+    pa.field("lab_id", pa.string(), nullable=False),
+    pa.field("date", pa.date32(), nullable=False),
+    pa.field("lab_name", pa.string(), nullable=True),
+    pa.field("reason", pa.string(), nullable=True),
+    pa.field("marker", pa.string(), nullable=False),
+    pa.field("value", pa.float64(), nullable=True),
+    pa.field("value_text", pa.string(), nullable=True),
+    pa.field("unit", pa.string(), nullable=True),
+    pa.field("ref_low", pa.float64(), nullable=True),
+    pa.field("ref_high", pa.float64(), nullable=True),
+    pa.field("flag", pa.string(), nullable=True),
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+    pa.field("year", pa.string(), nullable=True),
+])

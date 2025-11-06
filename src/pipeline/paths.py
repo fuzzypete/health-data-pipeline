@@ -1,3 +1,5 @@
+from pathlib import Path
+DATA_DIR = Path('Data')
 """
 Path definitions for Health Data Pipeline.
 
@@ -83,3 +85,4 @@ __all__ = [
     "CARDIO_STROKES_PATH",
     "RESISTANCE_SETS_PATH",
 ]
+LABS_PATH = DATA_DIR / 'Parquet' / 'labs'
