@@ -236,3 +236,27 @@ labs.debug:
 	@echo "HDP_LABS_FILE_NAME=[[$(HDP_LABS_FILE_NAME)]]"
 	@echo "HDP_LABS_FOLDER_ID=[[$(HDP_LABS_FOLDER_ID)]]"
 	@echo "HDP_OUT_LABS=[[$(HDP_OUT_LABS)]]"
+
+# --- DuckDB views setup ---
+DUCKDB_FILE ?= Data/duck/health.duckdb
+CREATE_VIEWS_SQL ?= scripts/sql/create-views.sql
+
+.PHONY: duck.init duck.views duck.query
+
+duck.init:
+	@mkdir -p $(dir $(DUCKDB_FILE))
+	@mkdir -p scripts/sql
+	@test -f "$(CREATE_VIEWS_SQL)" || (echo "Missing $(CREATE_VIEWS_SQL). Create it first."; exit 1)
+	@echo "Creating/initializing $(DUCKDB_FILE)…"
+	poetry run duckdb "$(DUCKDB_FILE)" -init "$(CREATE_VIEWS_SQL)" -c "SELECT 'ok'"
+
+duck.views:
+	@test -f "$(CREATE_VIEWS_SQL)" || (echo "Missing $(CREATE_VIEWS_SQL)"; exit 1)
+	@echo "Applying views from $(CREATE_VIEWS_SQL)…"
+	poetry run duckdb "$(DUCKDB_FILE)" -init "$(CREATE_VIEWS_SQL)" -c "SELECT 'ok'"
+
+# Ad-hoc query helper:
+# Usage: make duck.query SQL="SELECT * FROM lake.labs LIMIT 20"
+duck.query:
+	@test -n "$(SQL)" || (echo 'Provide SQL="SELECT …"'; exit 1)
+	poetry run duckdb "$(DUCKDB_FILE)" -c "$(SQL)"

@@ -23,7 +23,7 @@ def read_excel_wide(path: str, sheet_name: str) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-def melt_to_long(df: pd.DataFrame) -> pd.DataFrame:
+def melt_to_long(df: pd.DataFrame, source: str) -> pd.DataFrame:
     # Locate key columns
     def find_col(cands):
         for c in df.columns:
@@ -68,7 +68,7 @@ def melt_to_long(df: pd.DataFrame) -> pd.DataFrame:
     long_df["lab_id"] = long_df.apply(lambda r: _hash_lab_id(str(r["date"]), str(r["lab_name"])), axis=1)
     long_df["year"] = pd.to_datetime(long_df["date"]).dt.year.astype(str)
 
-    long_df["source"] = Path(DEFAULT_INPUT).name
+    long_df["source"] = source
     long_df["ingest_time_utc"] = pd.Timestamp.utcnow()
     if "ingest_run_id" not in long_df.columns:
         long_df["ingest_run_id"] = None
@@ -105,7 +105,7 @@ def main():
         return 1
     
     df_wide = read_excel_wide(input, sheet_name=args.sheet)
-    df_long = melt_to_long(df_wide)
+    df_long = melt_to_long(df_wide, Path(input).name)
     if args.run_id:
         df_long["ingest_run_id"] = args.run_id
     write_parquet(df_long)
