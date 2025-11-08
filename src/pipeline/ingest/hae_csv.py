@@ -1,8 +1,8 @@
-# src/pipeline/ingest/csv_delta.py
+# src/pipeline/ingest/hae_csv.py
 """
 HAE CSV ingestion - minute_facts and daily_summary.
 
-Refactored to use source-first directory structure:
+Refactored to use common utilities for config, timestamps, and I/O.
 - Reads from: Data/Raw/HAE/CSV/
 - Archives to: Data/Raw/HAE/Archive/ (optional)
 """
@@ -15,29 +15,37 @@ from typing import Optional, Iterable
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-import pyarrow.parquet as pq
 from datetime import datetime, timezone, time as dtime
 
+# --- Refactored Imports ---
 from pipeline.paths import (
     RAW_HAE_CSV_DIR,
     ARCHIVE_HAE_CSV_DIR,
     MINUTE_FACTS_PATH,
     DAILY_SUMMARY_PATH,
 )
+from pipeline.common.config import get_home_timezone
+from pipeline.common.schema import get_schema
+from pipeline.common.timestamps import apply_strategy_a
+from pipeline.common.parquet_io import (
+    write_partitioned_dataset,
+    add_lineage_fields,
+    create_date_partition_column,
+)
+# --- End Refactored Imports ---
 
 log = logging.getLogger(__name__)
-if not log.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
 
 DEFAULT_SOURCE = "HAE_CSV"
 
+# Get schemas once
 try:
-    from pipeline.common.schema import daily_summary_base
-except Exception:
-    daily_summary_base = None
+    MINUTE_FACTS_SCHEMA = get_schema("minute_facts")
+    DAILY_SUMMARY_SCHEMA = get_schema("daily_summary")
+except ValueError as e:
+    log.error(f"Could not load schemas. Have you defined 'minute_facts' and 'daily_summary'? Error: {e}")
+    MINUTE_FACTS_SCHEMA = None
+    DAILY_SUMMARY_SCHEMA = None
 
 # ---------------------------------------------------------------------
 # Column crosswalk: **daily totals only** (NOT minute streams)
@@ -97,52 +105,31 @@ def _load_csv(csv_path: Path) -> pd.DataFrame:
     return df
 
 
-def _add_required_fields(
-    df: pd.DataFrame,
-    source_value: str,
-    csv_path: Path,
-    ingest_run_id: str,
-) -> pd.DataFrame:
+def _apply_timestamp_strategy(df: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
     """
-    Ensure timestamps, lineage, and tz — correctly converting local → UTC (handles DST).
+    Apply Strategy A (Assumed Timezone) using common utility.
     """
-    TZ = "America/Los_Angeles"
-
-    if "timestamp_utc" not in df.columns:
-        if "timestamp_local" in df.columns:
-            local = pd.to_datetime(df["timestamp_local"], errors="coerce", utc=False)
-            df["timestamp_local"] = local
-            df["timestamp_utc"] = (
-                local.dt.tz_localize(TZ, ambiguous="infer", nonexistent="shift_forward")
-                    .dt.tz_convert("UTC")
-            )
-        elif "timestamp" in df.columns:
-            local = pd.to_datetime(df["timestamp"], errors="coerce", utc=False)
-            df["timestamp"] = local
-            df["timestamp_utc"] = (
-                local.dt.tz_localize(TZ, ambiguous="infer", nonexistent="shift_forward")
-                    .dt.tz_convert("UTC")
-            )
-        else:
-            raise ValueError(f"{csv_path}: expected 'timestamp_utc' or 'timestamp_local'")
-    else:
-        # If truly UTC in CSV, just parse as UTC
-        df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"], errors="coerce", utc=True)
-
-    # Keep local timestamp if present (naive by design)
+    home_tz = get_home_timezone()
+    
+    # Find the correct timestamp column
+    ts_col = None
     if "timestamp_local" in df.columns:
-        df["timestamp_local"] = pd.to_datetime(df["timestamp_local"], errors="coerce", utc=False)
-        try:
-            df["timestamp_local"] = df["timestamp_local"].dt.tz_localize(None)
-        except Exception:
-            pass
+        ts_col = "timestamp_local"
+    elif "timestamp" in df.columns:
+        ts_col = "timestamp"
+    
+    if not ts_col:
+        raise ValueError(f"{csv_path}: No suitable timestamp column found ('timestamp_local' or 'timestamp')")
 
-    if "tz_name" not in df.columns:
-        df["tz_name"] = TZ
+    # Rename to the canonical 'timestamp_local' if it's not already
+    if ts_col != "timestamp_local":
+         df.rename(columns={ts_col: "timestamp_local"}, inplace=True)
+         ts_col = "timestamp_local"
 
-    df["source"] = source_value
-    df["ingest_run_id"] = f"csv-{ingest_run_id}"
-    df["ingest_time_utc"] = datetime.now(timezone.utc)
+    # Use the common Strategy A function
+    # This adds: timestamp_local (naive), timestamp_utc (aware), tz_name, tz_source
+    df = apply_strategy_a(df, timestamp_col=ts_col, home_timezone=home_tz)
+    
     return df
 
 
@@ -150,16 +137,19 @@ def _coerce_metric_types(df: pd.DataFrame) -> pd.DataFrame:
     """
     Coerce canonical columns to appropriate dtypes.
     """
+    # Note: Int32 (capital I) allows for <NA> values
     int_cols = ["steps", "flights_climbed",
-                "heart_rate_min", "heart_rate_max", "heart_rate_avg",
                 "sleep_minutes_asleep", "sleep_minutes_in_bed"]
+                
+    # These come from minute-level data, which may not be present in every file
+    min_lvl_int_cols = ["heart_rate_min", "heart_rate_max", "heart_rate_avg"]
+
     float_cols = ["active_energy_kcal", "basal_energy_kcal", "calories_kcal",
                   "distance_mi", "sleep_score", "weight_lb", "body_fat_pct", "temperature_degF"]
 
-    for c in int_cols:
+    for c in int_cols + min_lvl_int_cols:
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-            df[c] = df[c].round(0).astype("Int32")
+            df[c] = pd.to_numeric(df[c], errors="coerce").round(0).astype("Int32")
 
     for c in float_cols:
         if c in df.columns:
@@ -178,20 +168,6 @@ def _find_water_fl_oz(df: pd.DataFrame) -> Optional[pd.Series]:
                 w = w / ML_PER_FL_OZ
             return w
     return None
-
-
-def _to_table_with_partitions(df: pd.DataFrame) -> pa.Table:
-    """Convert to PyArrow table with date partition column."""
-    ts_utc = pd.to_datetime(df["timestamp_utc"], errors="coerce", utc=True)
-    date_utc = ts_utc.dt.tz_convert("UTC").dt.date
-    df = df.assign(date=date_utc)
-    return pa.Table.from_pandas(df, preserve_index=False)
-
-
-def _write_parquet_dataset(table: pa.Table, root: Path) -> None:
-    """Write Parquet dataset with partitioning."""
-    root.mkdir(parents=True, exist_ok=True)
-    pq.write_to_dataset(table, root_path=str(root))
 
 
 # ---------------------------------------------------------------------
@@ -277,10 +253,7 @@ def _build_daily_summary(
         out["net_energy_kcal"] = (out["calories_kcal"] - out["energy_total_kcal"]).round(0)
 
     # Lineage
-    now_utc = datetime.now(timezone.utc)
-    out["source"] = source_value
-    out["ingest_time_utc"] = now_utc
-    out["ingest_run_id"] = ingest_run_id
+    out = add_lineage_fields(out, source_value, ingest_run_id)
 
     metric_cols = [c for c in out.columns if c not in {"date_utc", "source", "ingest_time_utc", "ingest_run_id"}]
     out = out.loc[out[metric_cols].notna().any(axis=1)].copy()
@@ -288,15 +261,18 @@ def _build_daily_summary(
         return None
 
     # Ensure schema columns exist
-    if daily_summary_base is not None:
-        for name in daily_summary_base.names:
+    if DAILY_SUMMARY_SCHEMA is not None:
+        for name in DAILY_SUMMARY_SCHEMA.names:
             if name not in out.columns:
                 out[name] = None
-        out = out.loc[:, daily_summary_base.names]
+        # Reorder and select only schema columns
+        out = out[DAILY_SUMMARY_SCHEMA.names]
+
+    # Create partition column
+    out = create_date_partition_column(out, 'date_utc', 'date', 'D')
 
     # Arrow table
-    table = pa.Table.from_pandas(out, preserve_index=False, schema=(daily_summary_base or None))
-    table = table.append_column("date", table.column("date_utc"))
+    table = pa.Table.from_pandas(out, preserve_index=False, schema=DAILY_SUMMARY_SCHEMA)
     return table
 
 
@@ -312,7 +288,7 @@ def _log_minute_summary(csv_path: Path, df: pd.DataFrame) -> None:
             return
         ts = pd.to_datetime(df["timestamp_utc"], errors="coerce")
         tmin, tmax = ts.min(), ts.max()
-        meta = {"timestamp_utc", "timestamp_local", "tz_name", "source", "ingest_time_utc", "ingest_run_id", "date"}
+        meta = {"timestamp_utc", "timestamp_local", "tz_name", "tz_source", "source", "ingest_time_utc", "ingest_run_id", "date"}
         metric_cols = [c for c in df.columns if c not in meta]
         nonnull_counts = []
         for c in metric_cols:
@@ -358,25 +334,51 @@ def _log_daily_summary_written(daily_tbl: pa.Table) -> None:
 # ---------------------------------------------------------------------
 # Main per-file pipeline
 # ---------------------------------------------------------------------
-def _write_minutes(df: pd.DataFrame) -> None:
-    """Write minute-level data."""
-    table = _to_table_with_partitions(df)
-    _write_parquet_dataset(table, MINUTE_FACTS_PATH)
+def process_minute_facts(df: pd.DataFrame, source_value: str, ingest_run_id: str) -> None:
+    """
+    Process and write minute-level data.
+    """
+    # Add lineage
+    df = add_lineage_fields(df, source_value, ingest_run_id)
+    
+    # Create partition column
+    df = create_date_partition_column(df, 'timestamp_utc', 'date', 'D')
+    
+    # Write using common helper
+    write_partitioned_dataset(
+        df,
+        MINUTE_FACTS_PATH,
+        partition_cols=['date', 'source'],
+        schema=MINUTE_FACTS_SCHEMA,
+        mode='overwrite_or_ignore' # safe mode for time-series
+    )
 
 
 def process_single_csv(csv_path: Path, source_value: str, ingest_run_id: str) -> None:
     """Process a single CSV file."""
     try:
         df = _load_csv(csv_path)
-        df = _add_required_fields(df, source_value=source_value, csv_path=csv_path, ingest_run_id=ingest_run_id)
+        df = _apply_timestamp_strategy(df, csv_path) # Refactored
         df = _coerce_metric_types(df)
 
-        _log_minute_summary(csv_path, df)
-        _write_minutes(df)
+        # Use .copy() to avoid SettingWithCopyWarning
+        minute_df = df.copy()
+        daily_df = df # No copy needed for last use
 
-        daily_tbl = _build_daily_summary(df, source_value=source_value, ingest_run_id=ingest_run_id)
+        # Process and write minute facts
+        _log_minute_summary(csv_path, minute_df)
+        process_minute_facts(minute_df, source_value, ingest_run_id) # Refactored
+
+        # Process and write daily summary
+        daily_tbl = _build_daily_summary(daily_df, source_value=source_value, ingest_run_id=ingest_run_id)
         if daily_tbl is not None:
-            _write_parquet_dataset(daily_tbl, DAILY_SUMMARY_PATH)
+            write_partitioned_dataset( # Use common helper
+                daily_tbl,
+                DAILY_SUMMARY_PATH,
+                partition_cols=['date', 'source'],
+                schema=DAILY_SUMMARY_SCHEMA,
+                mode='delete_matching' # Daily summaries should overwrite
+            )
             _log_daily_summary_written(daily_tbl)
             log.info("OK: %s → %s (daily_summary written)", csv_path.name, DAILY_SUMMARY_PATH)
         else:
@@ -429,4 +431,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if not log.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+        )
     main()

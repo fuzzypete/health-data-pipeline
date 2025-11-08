@@ -35,6 +35,9 @@ minute_facts_base = pa.schema([
     pa.field("source", pa.string(), nullable=False),
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field (string for directory names)
+    pa.field("date", pa.string(), nullable=True),  
 ])
 
 
@@ -84,6 +87,9 @@ daily_summary_schema = pa.schema([
     pa.field("source", pa.string(), nullable=False),
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field (string for directory names)
+    pa.field("date", pa.string(), nullable=True),  
 ])
 
 

@@ -19,61 +19,75 @@ log = logging.getLogger(__name__)
 
 
 def write_partitioned_dataset(
-    df: pd.DataFrame,
+    data_to_write: pd.DataFrame | pa.Table,
     table_path: Path,
     partition_cols: list[str],
     schema: Optional[pa.Schema] = None,
     mode: str = 'delete_matching',
 ):
     """
-    Write DataFrame to partitioned Parquet dataset.
+    Write DataFrame or Table to partitioned Parquet dataset.
 
     Uses Hive-style partitioning with Snappy compression.
 
     Args:
-        df: DataFrame to write
+        data_to_write: DataFrame or Table to write
         table_path: Root path for the table (e.g., Data/Parquet/minute_facts)
         partition_cols: Columns to partition by (e.g., ['date', 'source'])
         schema: Optional PyArrow schema for validation
         mode: Write mode — one of:
-            - 'overwrite_or_ignore' → safe overwrite-or-skip (default)
+            - 'overwrite_or_ignore' → safe overwrite-or-skip
             - 'delete_matching'     → delete matching partitions first (true overwrite)
             - 'error'               → fail if existing data is present
-            - 'append'              → treated as 'overwrite_or_ignore' for now
-              (PyArrow no longer supports a separate append mode)
-
-    Example:
-        >>> df['date'] = pd.to_datetime(df['timestamp_utc']).dt.date
-        >>> write_partitioned_dataset(
-        ...     df,
-        ...     Path('Data/Parquet/minute_facts'),
-        ...     partition_cols=['date', 'source']
-        ... )
+            - 'append'              → treated as 'overwrite_or_ignore'
     """
-    if df.empty:
-        log.warning(f"Skipping write to {table_path}: DataFrame is empty")
-        return
     
-    # Ensure partition columns exist
-    for col in partition_cols:
-        if col not in df.columns:
-            raise ValueError(f"Partition column '{col}' not found in DataFrame")
+    table: pa.Table
+    num_rows: int
+
+    if isinstance(data_to_write, pd.DataFrame):
+        df = data_to_write  # It's a DataFrame
+        if df.empty:
+            log.warning(f"Skipping write to {table_path}: DataFrame is empty")
+            return
+        num_rows = len(df)
+        
+        # Ensure partition columns exist
+        for col in partition_cols:
+            if col not in df.columns:
+                raise ValueError(f"Partition column '{col}' not found in DataFrame")
+
+        # Convert to PyArrow table
+        if schema is not None:
+            # Ensure all schema columns exist (fill with None if missing)
+            for field in schema:
+                if field.name not in df.columns:
+                    df[field.name] = None
+            
+            # Reorder columns to match schema
+            df = df[[field.name for field in schema]]
+            table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
+        else:
+            table = pa.Table.from_pandas(df, preserve_index=False)
+    
+    elif isinstance(data_to_write, pa.Table):
+        table = data_to_write  # It's already a Table
+        if table.num_rows == 0:
+            log.warning(f"Skipping write to {table_path}: Table is empty")
+            return
+        num_rows = table.num_rows
+        
+        # Ensure partition columns exist
+        for col in partition_cols:
+            if col not in table.schema.names:
+                raise ValueError(f"Partition column '{col}' not found in Table schema")
+    
+    else:
+        raise TypeError(f"data_to_write must be pd.DataFrame or pa.Table, got {type(data_to_write)}")
+
     
     # Create table path
     table_path.mkdir(parents=True, exist_ok=True)
-    
-    # Convert to PyArrow table
-    if schema is not None:
-        # Ensure all schema columns exist (fill with None if missing)
-        for field in schema:
-            if field.name not in df.columns:
-                df[field.name] = None
-        
-        # Reorder columns to match schema
-        df = df[[field.name for field in schema]]
-        table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
-    else:
-        table = pa.Table.from_pandas(df, preserve_index=False)
     
     # Defensively normalize old mode names (append/overwrite) to PyArrow’s supported ones.
     mode_map = {
@@ -95,7 +109,7 @@ def write_partitioned_dataset(
         max_partitions=2048, 
     )
     
-    log.info(f"Wrote {len(df)} rows to {table_path} (partitions: {partition_cols})")
+    log.info(f"Wrote {num_rows} rows to {table_path} (partitions: {partition_cols})")
 
 
 def read_partitioned_dataset(
@@ -271,25 +285,25 @@ def add_lineage_fields(
 
 
 def create_date_partition_column(
-    df: pd.DataFrame,
+    data: pd.DataFrame | pa.Table,
     timestamp_col: str = 'timestamp_utc',
     partition_col: str = 'date',
-    period: str = 'M',
-) -> pd.DataFrame:
+    period: str = 'D',
+) -> pd.DataFrame | pa.Table:
     """
     Create date partition column from timestamp.
-    
+
     Converts a UTC timestamp to date for use as partition key.
     Supports both daily and monthly partitioning.
-    
+
     Args:
-        df: DataFrame with timestamp column
+        data: DataFrame or Table with timestamp column
         timestamp_col: Name of timestamp column
         partition_col: Name of partition column to create
         period: Pandas period code - 'D' for daily (default), 'M' for monthly
         
     Returns:
-        DataFrame with added partition column
+        Original data type (DataFrame or Table) with added partition column
         
     Examples:
         Daily partitioning (Concept2 workouts):
@@ -300,31 +314,49 @@ def create_date_partition_column(
         >>> create_date_partition_column(df, 'start_time_utc', 'date', 'M')
         # Creates: '2024-10-01' (first day of month)
     """
-    if timestamp_col not in df.columns:
-        raise ValueError(f"Timestamp column '{timestamp_col}' not found")
+    if isinstance(data, pa.Table):
+        # Handle PyArrow Table
+        if timestamp_col not in data.schema.names:
+            raise ValueError(f"Timestamp column '{timestamp_col}' not found in Table")
+        
+        timestamps = data.column(timestamp_col).to_pandas()
+        
+        if period == 'M':
+            dates = timestamps.dt.to_period('M').dt.to_timestamp().dt.strftime('%Y-%m-%d')
+        else:
+            dates = timestamps.dt.strftime('%Y-%m-%d')
+            
+        return data.append_column(partition_col, pa.array(dates))
+
+    elif isinstance(data, pd.DataFrame):
+        # Handle pandas DataFrame
+        df = data # Use df for clarity
+        if timestamp_col not in df.columns:
+            raise ValueError(f"Timestamp column '{timestamp_col}' not found in DataFrame")
+        
+        # Ensure timestamp is datetime (coerce to UTC if needed)
+        if not pd.api.types.is_datetime64_any_dtype(df[timestamp_col]):
+            df[timestamp_col] = pd.to_datetime(df[timestamp_col], utc=True)
+        
+        if period == 'M':
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', 'Converting to PeriodArray/Index representation will drop timezone information')
+                df[partition_col] = (
+                    df[timestamp_col]
+                    .dt.to_period('M')
+                    .dt.to_timestamp()  # Returns first day of month
+                    .dt.strftime('%Y-%m-%d')
+                )
+        else:
+            # Daily (default): extract date as YYYY-MM-DD
+            df[partition_col] = df[timestamp_col].dt.strftime('%Y-%m-%d')
+        
+        return df
     
-    # Ensure timestamp is datetime (coerce to UTC if needed)
-    if not pd.api.types.is_datetime64_any_dtype(df[timestamp_col]):
-        df[timestamp_col] = pd.to_datetime(df[timestamp_col], utc=True)
-    
-    if period == 'M':
-        # Monthly: convert to period, then to first day of month
-        # This ensures all workouts in a month share the same partition key
-        # Note: TZ info is dropped during to_period() but restored by to_timestamp()
-        import warnings
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', 'Converting to PeriodArray/Index representation will drop timezone information')
-            df[partition_col] = (
-                df[timestamp_col]
-                .dt.to_period('M')
-                .dt.to_timestamp()  # Returns first day of month
-                .dt.strftime('%Y-%m-%d')
-            )
     else:
-        # Daily (default): extract date as YYYY-MM-DD
-        df[partition_col] = df[timestamp_col].dt.strftime('%Y-%m-%d')
-    
-    return df
+        raise TypeError(f"data must be pd.DataFrame or pa.Table, got {type(data)}")
+
 
 def get_existing_partitions(table_path: Path) -> list[dict]:
     """
