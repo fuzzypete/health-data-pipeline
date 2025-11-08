@@ -14,21 +14,11 @@ PARQUET_DIR  := Data/Parquet
 DUCKDB_FILE  ?= Data/duck/health.duckdb
 
 # Default ingestion targets for 'make all'
-INGEST_TARGETS ?= ingest-hae ingest-concept2-all ingest-jefit labs.all
+# This now fetches from Drive first, then runs all ingestions
+INGEST_TARGETS ?= fetch-all ingest-hae ingest-concept2-all ingest-jefit ingest-labs ingest-protocols
 
-# Google Drive / Labs config (override in .env)
-GOOGLE_APPLICATION_CREDENTIALS ?= ~/.config/healthdatapipeline/hdpfetcher-key.json
-HDP_LABS_FILE_NAME ?= AllLabsHistory.xlsx
-HDP_LABS_FILE_ID   ?=
-HDP_LABS_FOLDER_ID ?=
-HDP_OUT_LABS       ?= Data/Raw/labs/labs-master-latest.xlsx
-
-# Strip whitespace from config
-HDP_LABS_FILE_NAME := $(strip $(HDP_LABS_FILE_NAME))
-HDP_LABS_FOLDER_ID := $(strip $(HDP_LABS_FOLDER_ID))
-HDP_OUT_LABS       := $(strip $(HDP_OUT_LABS))
-HDP_FOLDER_ARG     := $(if $(HDP_LABS_FOLDER_ID),--folder-id $(HDP_LABS_FOLDER_ID),)
-HDP_LABS_INGEST_CMD ?= poetry run python -m pipeline.ingest.labs_excel --input "$(HDP_OUT_LABS)"
+# NOTE: All HDP_... (Drive config) variables have been removed.
+# They are now read by the fetch script from config.yaml and .env
 
 # ============================================================================
 # Development Environment
@@ -67,6 +57,7 @@ dev-shell:
 
 .PHONY: ingest-hae ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
 .PHONY: ingest-jefit ingest-jefit-file test-jefit backfill-lactate
+.PHONY: ingest-labs ingest-protocols
 .PHONY: all reload show-ingest check-parquet
 
 # --- HAE (Apple Health Export) ---
@@ -112,6 +103,16 @@ ingest-jefit-file:
 test-jefit:
 	$(PYTHON) scratch/test_jefit_ingestion.py
 
+# --- Labs & Protocols (from downloaded Excel) ---
+
+ingest-labs:
+	@echo "Ingesting Labs from downloaded Excel file..."
+	$(PYTHON) -m pipeline.ingest.labs_excel
+
+ingest-protocols:
+	@echo "Ingesting Protocols from downloaded Excel file..."
+	$(PYTHON) -m pipeline.ingest.protocol_excel
+
 # --- Aggregates & Utilities ---
 
 show-ingest:
@@ -124,7 +125,8 @@ all: show-ingest
 		echo "=== Running $$t ==="; \
 		$(MAKE) $$t; \
 	done
-	@echo ""; echo "✅ All ingestion completed."
+	@echo ""; \
+	echo "✅ All ingestion completed."
 
 reload: drop-parquet all
 
@@ -133,61 +135,33 @@ check-parquet:
 	@$(PYTHON) check_parquet_status.py
 
 # ============================================================================
-# Labs (Google Drive sync + ingestion)
+# Google Drive Fetching (NEW UNIFIED SECTION)
 # ============================================================================
 
-.PHONY: labs.env labs.check labs.fetch labs.fetch.id labs.fetch.any
-.PHONY: labs.ingest labs.all labs.clean labs.debug
+.PHONY: fetch-all fetch-labs fetch-protocols fetch-hae
 
-labs.env:
-	@echo "GOOGLE_APPLICATION_CREDENTIALS=$(GOOGLE_APPLICATION_CREDENTIALS)"
-	@echo "HDP_LABS_FILE_NAME=$(HDP_LABS_FILE_NAME)"
-	@echo "HDP_LABS_FILE_ID=$(HDP_LABS_FILE_ID)"
-	@echo "HDP_LABS_FOLDER_ID=$(HDP_LABS_FOLDER_ID)"
-	@echo "HDP_OUT_LABS=$(HDP_OUT_LABS)"
+FETCH_SCRIPT := scripts/fetch_drive_sources.py
 
-labs.check:
-	@test -n "$(GOOGLE_APPLICATION_CREDENTIALS)" && test -f "$(GOOGLE_APPLICATION_CREDENTIALS)" || ( \
-		echo "❌ Missing SA key. Set GOOGLE_APPLICATION_CREDENTIALS to a valid file."; \
-		exit 1 )
+fetch-all:
+	@echo "Fetching all Google Drive sources defined in config.yaml..."
+	$(PYTHON) $(FETCH_SCRIPT)
 
-labs.fetch: labs.check
-	@mkdir -p $(dir $(HDP_OUT_LABS))
-	poetry run python scripts/hdp_drive_fetcher.py \
-		--file-name "$(HDP_LABS_FILE_NAME)" \
-		$(HDP_FOLDER_ARG) \
-		--out "$(HDP_OUT_LABS)"
-	@echo "✅ Saved -> $(HDP_OUT_LABS)"
+fetch-labs:
+	@echo "Fetching 'labs' source from Google Drive..."
+	$(PYTHON) $(FETCH_SCRIPT) labs
 
-labs.fetch.id: labs.check
-	@test -n "$(HDP_LABS_FILE_ID)" || (echo "❌ Set HDP_LABS_FILE_ID to a Drive file ID"; exit 1)
-	@mkdir -p $(dir $(HDP_OUT_LABS))
-	poetry run python scripts/hdp_drive_fetcher.py \
-		--file-id "$(HDP_LABS_FILE_ID)" \
-		--out "$(HDP_OUT_LABS)"
-	@echo "✅ Saved -> $(HDP_OUT_LABS)"
+fetch-protocols:
+	@echo "Fetching 'protocols' source from Google Drive..."
+	$(PYTHON) $(FETCH_SCRIPT) protocols
 
-labs.fetch.any:
-	@if [ -n "$(HDP_LABS_FILE_ID)" ]; then \
-		$(MAKE) labs.fetch.id; \
-	else \
-		$(MAKE) labs.fetch; \
-	fi
+fetch-hae:
+	@echo "Fetching all HAE sources (hae_csv, hae_json, hae_quick) from Google Drive..."
+	$(PYTHON) $(FETCH_SCRIPT) hae_csv hae_json hae_quick
 
-labs.ingest:
-	@test -f "$(HDP_OUT_LABS)" || (echo "❌ Missing: $(HDP_OUT_LABS). Run 'make labs.fetch' first." && exit 1)
-	@echo "Ingesting $(HDP_OUT_LABS)…"
-	@$(HDP_LABS_INGEST_CMD)
-
-labs.all: labs.fetch.any labs.ingest
-
-labs.clean:
-	@rm -f "$(HDP_OUT_LABS)" && echo "Removed $(HDP_OUT_LABS)" || true
-
-labs.debug:
-	@echo "HDP_LABS_FILE_NAME=[[$(HDP_LABS_FILE_NAME)]]"
-	@echo "HDP_LABS_FOLDER_ID=[[$(HDP_LABS_FOLDER_ID)]]"
-	@echo "HDP_OUT_LABS=[[$(HDP_OUT_LABS)]]"
+# ============================================================================
+# Labs (Google Drive sync + ingestion)  <-- THIS SECTION IS NOW REMOVED
+# ============================================================================
+# (All old labs.* targets are gone)
 
 # ============================================================================
 # DuckDB (Local query engine)
@@ -267,21 +241,20 @@ help:
 	@echo "  dev-shell        - Open Poetry shell"
 	@echo ""
 	@echo "Ingestion - Primary:"
-	@echo "  ingest-hae              - Ingest HAE (Apple Health) CSV data"
-	@echo "  ingest-concept2         - Ingest last 50 Concept2 workouts"
+	@echo "  ingest-hae              - Ingest HAE (Apple Health) CSV data from Data/Raw/HAE/CSV/"
+	@echo "  ingest-concept2         - Ingest last 50 Concept2 workouts via API"
 	@echo "  ingest-concept2-recent  - Ingest last 10 workouts (quick test)"
 	@echo "  ingest-concept2-all     - Ingest last 200 workouts (full sync)"
 	@echo "  ingest-jefit            - Ingest latest JEFIT CSV from Data/Raw/JEFIT/"
 	@echo "  ingest-jefit-file       - Ingest specific file: FILE=path/to/export.csv"
+	@echo "  ingest-labs             - Ingest downloaded Labs Excel file -> Parquet"
+	@echo "  ingest-protocols        - Ingest downloaded Protocols Excel file -> Parquet"
 	@echo ""
-	@echo "Ingestion - Labs (Google Drive):"
-	@echo "  labs.fetch       - Download labs from Google Drive by filename"
-	@echo "  labs.fetch.id    - Download labs by file ID (faster)"
-	@echo "  labs.fetch.any   - Auto-detect ID vs filename"
-	@echo "  labs.ingest      - Ingest downloaded labs Excel → Parquet"
-	@echo "  labs.all         - Fetch + ingest in one command"
-	@echo "  labs.env         - Show current labs config"
-	@echo "  labs.clean       - Remove downloaded labs file"
+	@echo "Ingestion - Google Drive (Fetch):"
+	@echo "  fetch-all               - Fetch all sources from Google Drive defined in config.yaml"
+	@echo "  fetch-labs              - Fetch 'labs' source from Google Drive"
+	@echo "  fetch-protocols         - Fetch 'protocols' source from Google Drive"
+	@echo "  fetch-hae               - Fetch all HAE sources (hae_csv, hae_json, hae_quick) from Drive"
 	@echo ""
 	@echo "Ingestion - Utilities:"
 	@echo "  all              - Run all default targets: $(INGEST_TARGETS)"
@@ -307,7 +280,7 @@ help:
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "Quick Start:"
 	@echo "  1. make install"
-	@echo "  2. Configure .env with GOOGLE_APPLICATION_CREDENTIALS"
-	@echo "  3. make all          # Run all ingestion"
+	@echo "  2. Configure .env with GOOGLE_APPLICATION_CREDENTIALS and HDP_... folder IDs"
+	@echo "  3. make all          # Fetch all data from Drive AND run all ingestions"
 	@echo "  4. make check-parquet # Verify data loaded"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

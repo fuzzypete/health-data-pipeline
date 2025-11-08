@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import yaml
 from dotenv import load_dotenv
@@ -38,7 +38,8 @@ DEFAULT_CONFIG = {
         'concept2': {
             'base_url': 'https://log.concept2.com/api/',
         }
-    }
+    },
+    'drive_sources': {}
 }
 
 
@@ -50,11 +51,6 @@ class Config:
     1. config.yaml in project root (if exists)
     2. Environment variables (as override)
     3. Defaults (as fallback)
-    
-    Example:
-        >>> config = Config()
-        >>> home_tz = config.get_home_timezone()
-        >>> concept2_token = config.get_api_token('concept2')
     """
     
     _instance: Optional['Config'] = None
@@ -103,7 +99,7 @@ class Config:
     def _load_env_overrides(self) -> None:
         """Load overrides from environment variables."""
         # Timezone
-        if env_tz := os.getenv('HDP_HOME_TIMEZONE'):
+        if env_tz := os.getenv('LOCAL_TIMEZONE'):
             self._config['timezone']['default'] = env_tz
         
         # API tokens
@@ -111,21 +107,33 @@ class Config:
             self._config['api']['concept2']['token'] = c2_token
         
         # Data directories
-        if data_root := os.getenv('HDP_DATA_ROOT'):
+        if data_root := os.getenv('DATA_ROOT'): # From .env.example
             self._config['data']['raw_dir'] = f"{data_root}/Raw"
             self._config['data']['parquet_dir'] = f"{data_root}/Parquet"
             self._config['data']['archive_dir'] = f"{data_root}/Archive"
             self._config['data']['error_dir'] = f"{data_root}/Error"
+            
+        # --- New Drive Source Overrides ---
+        # This allows setting IDs from .env instead of hardcoding in config.yaml
+        drive_sources = self._config.get('drive_sources', {})
+        
+        if (labs_folder_id := os.getenv('HDP_LABS_FOLDER_ID')) and 'labs' in drive_sources:
+            drive_sources['labs']['parent_folder_id'] = labs_folder_id
+            
+        if (protocols_folder_id := os.getenv('HDP_PROTOCOLS_FOLDER_ID')) and 'protocols' in drive_sources:
+            drive_sources['protocols']['parent_folder_id'] = protocols_folder_id
+
+        if hae_parent_id := os.getenv('HDP_HAE_PARENT_ID'):
+            if 'hae_csv' in drive_sources:
+                drive_sources['hae_csv']['parent_folder_id'] = hae_parent_id
+            if 'hae_json' in drive_sources:
+                drive_sources['hae_json']['parent_folder_id'] = hae_parent_id
+            if 'hae_quick' in drive_sources:
+                drive_sources['hae_quick']['parent_folder_id'] = hae_parent_id
     
     def get(self, key_path: str, default: Any = None) -> Any:
         """
         Get configuration value by dot-notation path.
-        
-        Example:
-            >>> config.get('timezone.default')
-            'America/Los_Angeles'
-            >>> config.get('api.concept2.base_url')
-            'https://log.concept2.com/api/'
         """
         keys = key_path.split('.')
         value = self._config
@@ -138,6 +146,10 @@ class Config:
         
         return value
     
+    def get_drive_source(self, source_name: str) -> Optional[Dict[str, Any]]:
+        """Get the configuration for a specific Google Drive source."""
+        return self.get(f'drive_sources.{source_name}')
+
     def get_home_timezone(self) -> str:
         """Get the user's home timezone for Strategy A ingestion."""
         return self.get('timezone.default', 'America/Los_Angeles')
@@ -145,12 +157,6 @@ class Config:
     def get_api_token(self, service: str) -> Optional[str]:
         """
         Get API token for a service.
-        
-        Args:
-            service: Service name (e.g., 'concept2')
-            
-        Returns:
-            API token if configured, None otherwise
         """
         return self.get(f'api.{service}.token')
     
@@ -161,12 +167,6 @@ class Config:
     def get_data_dir(self, dir_type: str) -> Path:
         """
         Get data directory path.
-        
-        Args:
-            dir_type: One of 'raw', 'parquet', 'archive', 'error'
-            
-        Returns:
-            Path object for the directory
         """
         dir_path = self.get(f'data.{dir_type}_dir', f'Data/{dir_type.title()}')
         return Path(dir_path)
@@ -186,9 +186,6 @@ class Config:
     def validate(self) -> list[str]:
         """
         Validate configuration.
-        
-        Returns:
-            List of validation errors (empty if valid)
         """
         errors = []
         
@@ -223,6 +220,9 @@ def get_config() -> Config:
     """Get the configuration singleton."""
     return Config()
 
+def get_drive_source(source_name: str) -> Optional[Dict[str, Any]]:
+    """Get the configuration for a specific Google Drive source."""
+    return get_config().get_drive_source(source_name)
 
 def get_home_timezone() -> str:
     """Get the user's home timezone."""

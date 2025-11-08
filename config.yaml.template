@@ -4,24 +4,7 @@
 # Timezone configuration
 timezone:
   # Your home timezone for Strategy A ingestion (HAE CSV/JSON)
-  # Used for minute_facts and daily_summary
   default: "America/Los_Angeles"
-  
-  # Optional: Historical timezone changes (if you moved)
-  # changes:
-  #   - before: "2025-06-01"
-  #     timezone: "America/Los_Angeles"
-  #     notes: "Seattle era"
-  #   - after: "2025-06-01"
-  #     timezone: "America/Chicago"
-  #     notes: "Moved to Austin"
-  
-  # Optional: Known travel periods (for filtering in analysis)
-  # travel_periods:
-  #   - start: "2025-03-15"
-  #     end: "2025-03-22"
-  #     timezone: "Europe/London"
-  #     notes: "London vacation"
 
 # API configuration
 api:
@@ -29,10 +12,6 @@ api:
     # Get your token from: https://log.concept2.com/developers
     token: "YOUR_CONCEPT2_API_TOKEN_HERE"
     base_url: "https://log.concept2.com/api/"
-  
-  # Future APIs can be added here
-  # apple_health:
-  #   ...
 
 # Data directory paths
 data:
@@ -43,26 +22,53 @@ data:
 
 # Ingestion settings
 ingestion:
-  # Batch size for API pagination
   batch_size: 50
-  
-  # Retry configuration for API calls
   max_retries: 3
   retry_delay_seconds: 5
-  
-  # Archive processed files after successful ingestion
   archive_after_ingest: true
 
 # Logging configuration
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "pipeline.log"  # Set to null to disable file logging
+  file: "pipeline.log"
 
 # Validation settings
 validation:
-  # Run validation checks after ingestion
   enabled: true
-  
-  # Fail on validation errors (vs. just warn)
   strict: false
+
+# ============================================================================
+# Google Drive Sources
+# ============================================================================
+# Define all sources to be fetched from Google Drive.
+# IDs can be set here or in your .env file (e.g., HDP_LABS_FILE_ID)
+# ============================================================================
+drive_sources:
+  
+  labs:
+    # 'single_file': Downloads one file by ID and converts to xlsx.
+    type: "single_file"
+    file_id: "" # Set HDP_LABS_FILE_ID in .env or paste ID here
+    output_path: "Data/Raw/labs/labs-master-latest.xlsx"
+    sheet_name: "Lab Results" # For the ingestion step
+
+  protocols:
+    type: "single_file"
+    file_id: "" # Set HDP_PROTOCOLS_FILE_ID in .env or paste ID here
+    output_path: "Data/Raw/labs/protocols-master-latest.xlsx"
+    sheet_name: "Events" # For the ingestion step
+
+  hae_csv:
+    # 'folder_sync': Downloads ALL files from a folder.
+    type: "folder_sync"
+    folder_id: "" # Set HDP_HAE_CSV_FOLDER_ID in .env or paste ID here
+    output_dir: "Data/Raw/HAE/CSV"
+    # (Optional) ID of a folder to move files to after successful ingestion
+    archive_dir_id: "" # Set HDP_HAE_CSV_ARCHIVE_ID in .env or paste ID here
+
+  hae_json:
+    type: "folder_sync"
+    folder_id: "" # Set HDP_HAE_JSON_FOLDER_ID in .env or paste ID here
+    output_dir: "Data/Raw/HAE/JSON"
+    archive_dir_id: "" # Set HDP_HAE_JSON_ARCHIVE_ID in .env or paste ID here
