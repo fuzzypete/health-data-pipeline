@@ -1,5 +1,6 @@
-# Health Data Pipeline — Architecture (v2.0)
-**Date:** 2025-11-01
+# Health Data Pipeline — Architecture (v2.1)
+**Date:** 2025-11-08  
+**Last Updated:** Corrected JEFIT timestamp strategy classification
 
 ## System Overview
 
@@ -17,14 +18,14 @@ Health data ETL pipeline ingesting from multiple sources into normalized Parquet
 
 ## Timestamp Handling Strategy
 
-**Problem:** Health data sources have varying timezone quality. HAE CSV/Daily JSON exports lose per-event timezone info (travel day corruption), while Workout JSON, Concept2, and JEFIT preserve accurate timezones.
+**Problem:** Health data sources have varying timezone quality. HAE CSV/Daily JSON exports lose per-event timezone info (travel day corruption), while Workout JSON and Concept2 preserve accurate timezones. JEFIT CSV exports contain no timezone information at all.
 
 **Solution:** Hybrid ingestion with two strategies based on source data quality.
 
 ### Strategy A: Assumed Timezone (Lossy Sources)
-**Used for:** HAE CSV, HAE Daily JSON → `minute_facts`, `daily_summary`
+**Used for:** HAE CSV, HAE Daily JSON, JEFIT CSV → `minute_facts`, `daily_summary`, `workouts`, `resistance_sets`
 
-**Approach:** Ignore source timezone (corrupted on travel days), assume home timezone consistently.
+**Approach:** Ignore source timezone (corrupted or missing), assume home timezone consistently.
 
 **Result:** 
 - 95% of data (home days) perfectly correct
@@ -45,7 +46,7 @@ df['tz_source'] = 'assumed'
 ```
 
 ### Strategy B: Rich Timezone (High-Quality Sources)
-**Used for:** HAE Workout JSON, Concept2 API, JEFIT CSV → `workouts`, `cardio_splits`, `cardio_strokes`, `resistance_sets`
+**Used for:** HAE Workout JSON, Concept2 API → `workouts`, `cardio_splits`, `cardio_strokes`
 
 **Approach:** Trust per-event timezone from source (it's correct).
 
@@ -153,11 +154,13 @@ JEFIT CSV Export
 ```
 
 **Processing:**
-1. **Strategy B timestamp ingestion:** Use timestamps with user's actual timezone from CSV
+1. **Strategy A timestamp ingestion:** Parse naive timestamps and assume home timezone (see Timestamp Handling Strategy)
 2. Parse JEFIT CSV sections (ROUTINES, MYLOGS)
 3. Create workout_id per session
 4. Extract sets with weight/reps/rest
 5. Calculate session aggregates → `workouts`
+
+**Note:** JEFIT exports do not include timezone information, so we assume the user's home timezone (America/Los_Angeles) for all workouts. This means workout times will be incorrect on travel days but consistent at home.
 
 ---
 
@@ -213,131 +216,261 @@ make ingest-hae-workouts
 # 3. Concept2 sync (weekly or on-demand)
 make ingest-concept2
 
-# 4. JEFIT export (manual trigger)
+# 4. JEFIT resistance training
 make ingest-jefit
 ```
 
-### Ingestion Modules
+### On-Demand Operations
+```bash
+# Ingest specific HAE CSV file
+make ingest-hae-file FILE=path/to/export.csv
 
-**Core modules:**
-- `src/pipeline/ingest/csv_delta.py` - HAE CSV → minute_facts, daily_summary
-- `src/pipeline/ingest/hae_workouts.py` - HAE JSON → workouts
-- `src/pipeline/ingest/concept2_api.py` - Concept2 API → workouts + splits + strokes
-- `src/pipeline/ingest/jefit_csv.py` - JEFIT CSV → workouts + resistance_sets
+# Ingest specific JEFIT export
+make ingest-jefit-file FILE=path/to/jefit_export.csv
 
-**Shared utilities:**
-- `src/pipeline/common/schema.py` - PyArrow schemas
-- `src/pipeline/common/normalization.py` - Column mapping
-- `src/pipeline/validate/checks.py` - Data validation
+# Fetch latest from Google Drive
+make fetch-hae
+make fetch-labs
 
----
-
-## Technology Stack
-
-**Runtime:**
-- Python 3.11
-- Poetry for dependency management
-- Docker for containerization
-
-**Data Processing:**
-- pandas - DataFrame operations
-- pyarrow - Parquet I/O, schemas
-- dask - Future: distributed processing for large datasets
-
-**APIs:**
-- requests - HTTP client for Concept2 API
-
-**Development:**
-- pytest - Testing
-- black - Code formatting
-- ruff - Linting
-- Makefile - Task automation
-
----
-
-## Deduplication Strategy
-
-### Write Modes by Table
-
-**Minute-level (time-series):**
-- `minute_facts`: Dedupe on (`timestamp_utc`, `source`) before write
-- `daily_summary`: Overwrite partition on re-ingest
-
-**Session-level (workouts):**
-- `workouts`: Upsert by (`workout_id`, `source`)
-
-**Granular data (sub-workout):**
-- `cardio_splits`: Overwrite all splits for `workout_id` on re-ingest
-- `cardio_strokes`: Overwrite all strokes for `workout_id` on re-ingest
-- `resistance_sets`: Overwrite all sets for `workout_id` on re-ingest
-
-**Rationale:** Granular data is always fetched atomically per workout, so full replacement is safe and simpler than row-level merge.
-
----
-
-## Query Patterns
-
-### Time-series analysis
-```sql
-SELECT timestamp_utc, heart_rate_avg, steps
-FROM minute_facts
-WHERE date BETWEEN '2025-10-01' AND '2025-10-31'
-  AND source = 'HAE_CSV'
-```
-
-### Workout summaries
-```sql
-SELECT workout_type, AVG(duration_s), AVG(calories_kcal)
-FROM workouts
-WHERE date >= '2025-01-01'
-GROUP BY workout_type
-```
-
-### Power curve analysis (Concept2)
-```sql
-SELECT 
-  cs.time_cumulative_s,
-  cs.pace_500m_cs,
-  cs.heart_rate_bpm
-FROM workouts w
-JOIN cardio_strokes cs ON w.workout_id = cs.workout_id
-WHERE w.erg_type = 'rower'
-  AND w.date = '2025-10-30'
-ORDER BY cs.time_cumulative_s
-```
-
-### Volume tracking (resistance training)
-```sql
-SELECT 
-  DATE_TRUNC('week', workout_start_utc) as week,
-  exercise_name,
-  SUM(actual_reps * weight_lbs) as weekly_volume
-FROM resistance_sets
-WHERE exercise_name = 'Dumbbell Bench Press'
-GROUP BY week, exercise_name
+# Full reload (drop + re-ingest everything)
+make reload
 ```
 
 ---
 
-## Enrichment Pipeline (Future)
+## Quality Assurance
 
-### Planned enrichments:
-1. **Workout context** - Join minute_facts HR data with workouts
-2. **Recovery metrics** - Calculate HRV trends, sleep quality correlation
-3. **Volume periodization** - Track resistance training load over time
-4. **Power zones** - Classify Concept2 efforts by HR/power zones
-5. **Protocol correlation** - Link labs/performance to supplement protocols
+### Validation Rules
 
-### Enriched tables:
-- `enriched_workouts` - Workouts + surrounding context
-- `daily_metrics_enriched` - Daily summary + derived insights
-- `body_metrics_calculated` - Trending, percentiles, changes
+**Temporal Integrity:**
+- Monotonicity: Within partition, timestamps increasing
+- DST day counts: Spring-forward ~1380 min, fall-back ~1500 min
+- Duplicate detection: Flag identical (timestamp_utc, source)
+
+**Value Ranges:**
+- `heart_rate_bpm`: 30-220
+- `steps`: 0-50,000
+- `water_fl_oz`: 0-338 (0-10L)
+- `sleep_efficiency_pct`: 0-100
+
+**Workout Validation:**
+- `duration_s` > 0
+- `start_time_utc` <= `end_time_utc`
+- If `has_splits=true`, expect splits present
+- If `has_strokes=true`, expect strokes present
+
+**Resistance Training:**
+- `actual_reps` >= 0
+- `weight_lbs` >= 0
+- `set_number` >= 1 and sequential per exercise
+
+### Error Handling
+
+**Strategy:** Fail fast with clear error messages
+
+**Common errors:**
+- **Missing file:** Log warning, skip ingestion
+- **Malformed CSV/JSON:** Move to `Data/Error/`, log details
+- **API timeout:** Retry with exponential backoff (max 3 retries)
+- **Validation failure:** Log row details, optionally skip
+
+**Logging pattern:**
+```python
+logger.info(f"minutes: {file} → rows={n}, window={min_ts}..{max_ts}")
+logger.info(f"daily_summary: rows={n}, dates={min}..{max}")
+logger.warning(f"validation: {issue_type} in {file} at row {idx}")
+logger.error(f"FAILED: {file} → {error_type}: {details}")
+```
 
 ---
 
-## Version History
+## Configuration Management
 
-| Version | Date       | Changes |
-|---------|------------|---------|
-| v2.0    | 2025-11-01 | Added Concept2 API and JEFIT ingestion; cardio splits/strokes; resistance sets |
-| v1.0    | 2025-10-24 | Initial architecture: HAE CSV → minute_facts, daily_summary |
+### config.yaml Structure
+
+```yaml
+# Timezone configuration
+timezone:
+  default: "America/Los_Angeles"  # For Strategy A sources
+  
+# API credentials
+api:
+  concept2:
+    token: "YOUR_TOKEN_HERE"
+    base_url: "https://log.concept2.com/api/"
+
+# Data directories
+data:
+  raw_dir: "Data/Raw"
+  parquet_dir: "Data/Parquet"
+  archive_dir: "Data/Archive"
+  error_dir: "Data/Error"
+
+# Ingestion settings
+ingestion:
+  batch_size: 50
+  max_retries: 3
+  retry_delay_seconds: 5
+  archive_after_ingest: true
+```
+
+### Environment Variables (.env)
+
+```bash
+# Required
+CONCEPT2_API_TOKEN=your_token_here
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+
+# Optional (override config.yaml)
+LOCAL_TIMEZONE=America/Los_Angeles
+DATA_ROOT=/custom/data/path
+```
+
+---
+
+## Deployment
+
+### Local Development
+
+```bash
+# 1. Install dependencies
+poetry install
+
+# 2. Configure
+cp config.yaml.template config.yaml
+cp .env.example .env
+# Edit both files with your values
+
+# 3. Run ingestion
+make ingest-hae-daily
+make ingest-concept2
+make ingest-jefit
+
+# 4. Query with DuckDB
+make duck.init
+make duck.query
+```
+
+### Docker Deployment
+
+```bash
+# Build image
+docker build -t health-pipeline:latest .
+
+# Run ingestion
+docker run --rm \
+  -v $(pwd)/Data:/app/Data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/.env:/app/.env \
+  health-pipeline:latest \
+  make ingest-all
+
+# Run on schedule (cron in host)
+0 2 * * * docker run --rm -v ... health-pipeline:latest make ingest-hae-daily
+```
+
+---
+
+## Performance Optimization
+
+### Partitioning Strategy
+- Date + source partitioning enables efficient pruning
+- Typical query: single month = 30-31 partitions
+- Full year query: ~365 partitions (still manageable)
+
+### Compression
+- Parquet snappy compression: ~3-5x reduction
+- Annual data volume: ~60-80 MB (mostly stroke data)
+- 10 years historical: <1 GB total
+
+### Query Optimization
+- Use partition filters: `date >= '2025-01-01'`
+- Use source filters: `source = 'Concept2'`
+- Avoid `SELECT *`: Parquet is columnar
+- Use DuckDB for interactive queries (optimized Parquet reader)
+
+### Incremental Processing
+- Process only new files (not re-ingesting archives)
+- Dedupe on write (not post-processing)
+- Partition overwrite for daily summaries (idempotent)
+
+---
+
+## Future Enhancements
+
+### Phase 3: Labs & Protocols
+- Manual entry forms (web UI or CLI)
+- Lab result ingestion from PDF/Excel
+- Protocol history tracking (compounds, dosages, timing)
+- Correlation analysis: labs × protocols × workouts
+
+### Phase 4: Real-Time Monitoring
+- Glucose/ketone monitor integration
+- Lactate meter data capture
+- Heart rate variability (HRV) tracking
+- Sleep stage analysis (Oura, Whoop, etc.)
+
+### Phase 5: Advanced Analytics
+- Automated periodization analysis
+- Volume progression tracking
+- Recovery metrics (HRV, sleep, strain)
+- Supplement efficacy studies (n=1 experiments)
+- ML models for injury prevention
+
+### Phase 6: Visualization & Dashboards
+- Grafana dashboards for real-time monitoring
+- Jupyter notebooks for deep dives
+- Automated weekly/monthly reports
+- Interactive web UI for data exploration
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**Issue:** `No timezone information in JEFIT CSV`  
+**Solution:** This is expected. JEFIT uses Strategy A (assumed timezone). Workout times will be correct at home but incorrect on travel days.
+
+**Issue:** `Duplicate timestamps in minute_facts`  
+**Solution:** Check for multiple HAE exports covering same date range. Archive old exports and re-ingest.
+
+**Issue:** `API rate limit exceeded (Concept2)`  
+**Solution:** Pipeline has exponential backoff retry. Wait 5 minutes and retry. For historical backfills, use smaller date ranges.
+
+**Issue:** `Missing partitions after ingestion`  
+**Solution:** Check logs for validation failures. Files with errors are moved to `Data/Error/`.
+
+**Issue:** `Travel day timestamps are wrong`  
+**Solution:** Expected for Strategy A sources. Either accept the trade-off or manually correct using travel log.
+
+---
+
+## Maintenance
+
+### Weekly Tasks
+- Review error directory for failed ingestions
+- Check logs for validation warnings
+- Monitor storage usage (stroke data accumulates)
+
+### Monthly Tasks
+- Archive old CSV/JSON files
+- Validate partition integrity
+- Review query performance
+- Update API tokens if needed
+
+### Quarterly Tasks
+- Full data validation audit
+- Review and update documentation
+- Optimize slow queries
+- Plan new feature development
+
+---
+
+## References
+
+- **Schema Specification:** `docs/HealthDataPipelineSchema.md`
+- **Design Patterns:** `docs/HealthDataPipelineDesign.md`
+- **Timestamp Handling:** `docs/TimestampHandling.md`
+- **API Documentation:** `docs/API_Integration.md`
+

@@ -38,14 +38,6 @@ jobs:
       - name: Install dependencies
         run: |
           poetry install --no-interaction --no-ansi
-          # Ensure pytest is present (dev or runtime)
-          poetry run python - <<'PY'
-import pkgutil, sys
-sys.exit(0 if pkgutil.find_loader('pytest') else 1)
-PY
-          if [ $? -ne 0 ]; then
-            poetry run pip install pytest
-          fi
 
       - name: Run tests
         env:

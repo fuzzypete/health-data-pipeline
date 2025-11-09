@@ -1,4 +1,3 @@
-# tests/test_ingest_smoke.py
 from importlib import import_module
 
 def test_ingest_modules_import():

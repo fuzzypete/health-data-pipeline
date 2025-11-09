@@ -1,641 +1,376 @@
-# Health Data Pipeline — Timestamp Handling (Source of Truth)
-**Date:** 2025-11-01  
-**Version:** 1.0
-
-## Executive Summary
-
-This document defines the **canonical approach** to timestamp handling across the HDP. All ingestion code must follow these rules.
-
-**The Core Principle:** Use different strategies for different data quality levels. Consistency beats aspirational accuracy when source data is fundamentally flawed.
-
-**The Solution:** Hybrid ingestion with two strategies:
-- **Strategy A (Assumed Timezone):** For lossy sources (HAE CSV, HAE Daily JSON)
-- **Strategy B (Rich Timezone):** For correct sources (Workouts, Concept2, JEFIT)
-
-**The Schema:** Three timestamps enable everything:
-- `timestamp_local` - For analysis (circadian patterns)
-- `tz_name` - The context that makes local unambiguous
-- `timestamp_utc` - For pipeline operations (joins, dedup, partitioning)
-
----
+# Health Data Pipeline — Timestamp Handling (v1.1)
+**Date:** 2025-11-08  
+**Last Updated:** Corrected JEFIT classification
 
 ## 1. The Problem
 
-### Goal vs. Reality
-
-**What we want:** "Waking day" analysis using correct local timestamps
-- Sleep patterns by wall-clock time
-- Meal timing relative to circadian rhythm
-- Workout performance by time-of-day
-- Glucose patterns by hours-since-waking
-
-**What we have:** Sources with varying timezone data quality
+Health data sources have varying levels of timezone quality:
 
 | Source | Timezone Quality | Problem |
-|--------|-----------------|---------|
-| HAE CSV | **Lossy** | Export-time timezone, not per-event timezone |
-| HAE Daily JSON | **Lossy** | Same as CSV - timezone at export time only |
-| HAE Workout JSON | **Rich** | Per-event timezone stored correctly |
-| Concept2 API | **Rich** | Returns `timezone` and `date_utc` per workout |
-| JEFIT CSV | **Rich** | Timestamps with user's current timezone |
+|--------|------------------|---------|
+| **Rich Timezone Sources** |
+| HAE Workout JSON | **Rich** | Per-workout timezone preserved correctly |
+| Concept2 API | **Rich** | Per-workout timezone from API |
+| **Lossy Timezone Sources** |
+| HAE CSV/JSON (Daily) | **Lossy** | Export-time timezone only; corrupted on travel days |
+| JEFIT CSV | **Lossy** | No timezone provided; naive timestamps only |
 
-### The "Travel Day" Problem
-
-**Scenario:** You live in Seattle (UTC-8/-7), travel to St. Louis (UTC-6/-5)
-
-**What happens:**
-1. Morning in Seattle: Blood glucose reading at 08:00 PST
-2. Evening in St. Louis: Export HAE data at 20:00 CST
-3. **Result:** Seattle glucose reading is stamped "08:00 CST" in the export
-
-**The corruption:**
-```
-Actual:    2025-11-15 08:00:00 PST (UTC-8) → 2025-11-15 16:00:00 UTC
-Exported:  2025-11-15 08:00:00 CST (UTC-6) → 2025-11-15 14:00:00 UTC
-Error:     2 hours wrong in UTC, wrong timezone in local
-```
-
-### The "Consistency" Mandate
-
-**Bad approach:** Trust the source timezone
-- Travel day: 5% of data corrupted
-- Home days: 95% correct
-- **Result:** Chaos in analysis (which rows are trustworthy?)
-
-**Good approach:** Assume home timezone
-- Travel days: 5% knowingly wrong
-- Home days: 100% correct
-- **Result:** Consistent dataset with documented limitations
-
-**Trade-off:** 95% perfect + 5% consistently wrong > 95% perfect + 5% randomly corrupted
+**Key insight:** Not all sources are equally trustworthy for timezone data.
 
 ---
 
-## 2. The Solution: Hybrid Ingestion
+## 2. Solution: Hybrid Ingestion Strategy
 
-### Strategy A: Assumed Timezone Ingester
+### Strategy A: Assumed Timezone (Lossy Sources)
 
-**Used for:** HAE CSV, HAE Daily JSON → `minute_facts`, `daily_summary`
+**Used for:** HAE CSV, HAE Daily JSON, JEFIT CSV → `minute_facts`, `daily_summary`, `workouts`, `resistance_sets`
 
-**Algorithm:**
+**Approach:** Ignore any source timezone (corrupted or missing), assume home timezone consistently.
+
+**Implementation:**
 ```python
-# Configuration
+from zoneinfo import ZoneInfo
 LOCAL_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
-def ingest_with_assumed_timezone(df, source_name):
-    """
-    Strategy A: Ignore source timezone, assume home timezone
-    """
-    # 1. Read timestamp_local as naive (no timezone)
-    df['timestamp_local'] = pd.to_datetime(df['timestamp_local_column'], 
-                                           format='%Y-%m-%d %H:%M:%S')
-    
-    # 2. IGNORE any timezone in source data
-    # The source's timezone is wrong, don't use it
-    
-    # 3. Localize using ASSUMED timezone
-    # This correctly handles DST transitions for YOUR home zone
-    df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(
-        LOCAL_TIMEZONE, 
-        ambiguous='infer',    # DST fall-back: use context to infer
-        nonexistent='shift_forward'  # DST spring-forward: shift to valid time
-    )
-    
-    # 4. Create UTC from correctly-localized local time
-    df['timestamp_utc'] = df['timestamp_local'].dt.tz_convert('UTC')
-    
-    # 5. Store timezone name as ASSUMED (not from source)
-    df['tz_name'] = 'America/Los_Angeles'
-    df['tz_source'] = 'assumed'
-    
-    # 6. Convert to naive for Parquet storage
-    df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(None)
-    
-    return df[['timestamp_utc', 'timestamp_local', 'tz_name', 'tz_source', ...]]
+# 1. Parse timestamp as naive (ignore source timezone)
+df['timestamp_local'] = pd.to_datetime(df['timestamp'])
+
+# 2. Localize to assumed home timezone
+df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(
+    LOCAL_TIMEZONE,
+    ambiguous='infer',           # DST fall-back: use context
+    nonexistent='shift_forward'  # DST spring-forward: shift to valid time
+)
+
+# 3. Convert to UTC for pipeline operations
+df['timestamp_utc'] = df['timestamp_local'].dt.tz_convert('UTC')
+
+# 4. Store timezone metadata
+df['tz_name'] = 'America/Los_Angeles'
+df['tz_source'] = 'assumed'
+
+# 5. Convert local back to naive for Parquet storage
+df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(None)
 ```
 
 **Result:**
-- ✅ Clean, consistent minute_facts
-- ✅ Correct DST handling for home timezone
-- ✅ 95% of data perfectly correct
-- ⚠️ 5% of data (travel days) knowingly wrong but consistent
+- ✅ 95% of data (home days) perfectly correct
+- ⚠️ 5% of data (travel days) knowingly wrong but **consistent**
+- ✅ Enables clean circadian analysis without random corruption
 - ✅ Can be corrected later with manual travel log
+
+**Trade-off:** Consistency beats random corruption.
 
 ---
 
-### Strategy B: Rich Timezone Ingester
+### Strategy B: Rich Timezone (High-Quality Sources)
 
-**Used for:** HAE Workout JSON, Concept2 API, JEFIT CSV → `workouts`, `cardio_splits`, `cardio_strokes`, `resistance_sets`
+**Used for:** HAE Workout JSON, Concept2 API → `workouts`, `cardio_splits`, `cardio_strokes`
 
-**Algorithm:**
+**Approach:** Trust per-event timezone from source (it's correct).
+
+**Implementation:**
 ```python
-def ingest_with_rich_timezone(record):
-    """
-    Strategy B: Trust source timezone (it's correct for these sources)
-    """
-    # 1. Read timestamp_local and timezone from source
-    timestamp_local_str = record['date']  # "2025-10-30 13:58:00"
-    tz_name = record['timezone']          # "America/Los_Angeles"
-    
-    # 2. Localize using ACTUAL timezone from source
-    timestamp_local = pd.to_datetime(timestamp_local_str)
-    timestamp_local = timestamp_local.tz_localize(
-        ZoneInfo(tz_name),
-        ambiguous='infer',
-        nonexistent='shift_forward'
-    )
-    
-    # 3. Create UTC from correctly-localized local time
-    timestamp_utc = timestamp_local.tz_convert('UTC')
-    
-    # 4. Store timezone name as ACTUAL (from source)
-    tz_source = 'actual'
-    
-    # 5. Convert to naive for Parquet storage
-    timestamp_local = timestamp_local.tz_localize(None)
-    
-    return {
-        'timestamp_utc': timestamp_utc,
-        'timestamp_local': timestamp_local,
-        'tz_name': tz_name,
-        'tz_source': tz_source,
-        ...
-    }
+from zoneinfo import ZoneInfo
+
+# 1. Extract actual timezone from source
+tz_name = workout_json['timezone']  # "America/Los_Angeles"
+timestamp_str = workout_json['date']  # "2025-10-30 13:58:00"
+
+# 2. Localize using actual timezone from source
+timestamp_local = pd.to_datetime(timestamp_str).tz_localize(
+    ZoneInfo(tz_name),
+    ambiguous='infer',
+    nonexistent='shift_forward'
+)
+
+# 3. Convert to UTC
+timestamp_utc = timestamp_local.tz_convert('UTC')
+
+# 4. Store metadata
+tz_source = 'actual'
+
+# 5. Convert local to naive for Parquet
+timestamp_local = timestamp_local.tz_localize(None)
 ```
 
 **Result:**
-- ✅ Perfect accuracy for all workouts
-- ✅ Correct timezone on travel days
+- ✅ 100% accurate for all workouts including travel days
 - ✅ No assumptions, no corrections needed
 
 ---
 
-## 3. The Schema: Three Timestamps
+## 3. Three-Timestamp Schema
 
-### Field Definitions
+All tables store three timestamps to support both pipeline operations and circadian analysis:
 
-| Field | Type | Nullable | Purpose | Source |
-|-------|------|----------|---------|--------|
-| `timestamp_local` | timestamp (no TZ) | NO | **For analysis.** The "wall clock" time. Use for circadian patterns, grouping by hour-of-day, time-since-waking. | Read directly from source |
-| `tz_name` | string | YES | **The context.** Makes `timestamp_local` unambiguous. IANA timezone (e.g., "America/Los_Angeles"). | Strategy A: Assumed constant. Strategy B: From source. |
-| `timestamp_utc` | timestamp (UTC) | NO | **For pipeline.** Absolute, normalized time. Use for partitioning, deduplication, joins, sorting. | **Always calculated,** never read from source |
+| Field | Type | Purpose | Example |
+|-------|------|---------|---------|
+| `timestamp_utc` | timestamp (UTC) | **Pipeline canonical time.** Absolute, normalized timestamp for joins, dedup, partitioning, sorting. | 2025-10-30 20:58:00+00:00 |
+| `timestamp_local` | timestamp (naive) | **Analysis time.** Wall clock time for circadian patterns, hour-of-day analysis. Stored naive in Parquet. | 2025-10-30 13:58:00 |
+| `tz_name` | string | **Context for local time.** IANA timezone name that makes local unambiguous. | "America/Los_Angeles" |
+| `tz_source` | string | **Provenance.** Either "assumed" (Strategy A) or "actual" (Strategy B). Documents reliability. | "assumed" or "actual" |
 
-### Additional Metadata (Optional)
-
-| Field | Type | Purpose |
-|-------|------|---------|
-| `tz_source` | enum("assumed", "actual") | Documents whether `tz_name` was assumed or came from source |
-| `is_travel_day` | boolean | Manual flag for known travel days (for filtering in analysis) |
+**Why three timestamps?**
+- **UTC:** Universal reference for pipeline operations (joins, deduplication)
+- **Local:** Human-readable time for analysis (circadian patterns, hour-of-day)
+- **Timezone name:** Makes local time unambiguous (especially during DST)
+- **Source:** Documents which strategy was used (for data quality assessment)
 
 ---
 
-## 4. Implementation Details
+## 4. DST Handling
 
-### DST Handling
+Both strategies handle Daylight Saving Time transitions correctly:
 
-**Ambiguous times (fall-back):**
+### Spring Forward (March)
+**Problem:** 2:00 AM → 3:00 AM (2:30 AM doesn't exist)
+
+**Solution:** `nonexistent='shift_forward'`
 ```python
-# November 3, 2024, 01:30 AM happened twice in America/Los_Angeles
-# - First time: 01:30 PDT (UTC-7)
-# - Second time: 01:30 PST (UTC-8)
-
-dt.tz_localize(tz, ambiguous='infer')
-# Uses surrounding context to pick the right one
+# 2025-03-09 02:30:00 → shifted to 03:30:00
 ```
 
-**Nonexistent times (spring-forward):**
+### Fall Back (November)
+**Problem:** 2:00 AM → 1:00 AM (1:30 AM happens twice)
+
+**Solution:** `ambiguous='infer'`
 ```python
-# March 10, 2024, 02:30 AM never existed in America/Los_Angeles
-# Clocks jumped from 02:00 → 03:00
-
-dt.tz_localize(tz, nonexistent='shift_forward')
-# Shifts 02:30 → 03:00 (the actual time on the clock)
-```
-
-### Parquet Storage
-
-**Why naive timestamps for local:**
-```python
-# Parquet doesn't support "timestamp with timezone name"
-# Only supports: naive timestamp OR timestamp with UTC offset
-
-# Bad: Would lose timezone name
-df['timestamp_local'].dt.tz_localize('America/Los_Angeles')  # Has offset, loses name
-
-# Good: Store naive + store tz_name separately
-df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(None)
-df['tz_name'] = 'America/Los_Angeles'
-```
-
-**Reading back:**
-```python
-# When reading from Parquet for analysis
-df = pd.read_parquet('minute_facts')
-
-# Reconstruct timezone-aware local timestamp
-df['timestamp_local_aware'] = pd.to_datetime(df['timestamp_local']).dt.tz_localize(
-    df['tz_name'].iloc[0]  # Assuming single timezone per partition
-)
+# Uses context from surrounding timestamps to pick correct occurrence
+# For isolated timestamps, defaults to standard time (second occurrence)
 ```
 
 ---
 
-## 5. Query Patterns
+## 5. Parquet Storage
 
-### Circadian Analysis (Use timestamp_local)
+**Why naive timestamps in Parquet?**
+- PyArrow has limitations with timezone-aware timestamps in partitioned datasets
+- Storing naive + separate tz_name string avoids serialization issues
+- Reconstruction is trivial: `pd.to_datetime(df['timestamp_local']).dt.tz_localize(df['tz_name'])`
 
-**Example: Glucose patterns by hour of day**
-```sql
-SELECT 
-  EXTRACT(HOUR FROM timestamp_local) as hour_of_day,
-  AVG(glucose_mg_dl) as avg_glucose
-FROM minute_facts
-WHERE tz_source = 'assumed'  -- Only use consistent home timezone data
-  AND NOT is_travel_day      -- Exclude known travel days
-GROUP BY hour_of_day
-ORDER BY hour_of_day
-```
-
-**Example: Sleep quality by bedtime**
-```sql
-SELECT 
-  EXTRACT(HOUR FROM start_time_local) as bedtime_hour,
-  AVG(sleep_score) as avg_sleep_quality
-FROM workouts
-WHERE workout_type = 'Sleep'
-  AND tz_source = 'actual'   -- Workouts have correct timezone
-GROUP BY bedtime_hour
-```
-
-### Pipeline Operations (Use timestamp_utc)
-
-**Example: Join workout with surrounding glucose**
-```sql
-SELECT 
-  w.workout_id,
-  w.workout_type,
-  AVG(mf.glucose_mg_dl) as avg_glucose_during_workout
-FROM workouts w
-JOIN minute_facts mf 
-  ON mf.timestamp_utc BETWEEN w.start_time_utc AND w.end_time_utc
-WHERE w.date = '2025-10-30'
-GROUP BY w.workout_id, w.workout_type
-```
-
-**Example: Deduplicate on UTC**
+**Schema:**
 ```python
-# Remove duplicates based on absolute time
-df_deduped = df.drop_duplicates(subset=['timestamp_utc', 'source'])
-```
-
-### Time-of-Day Analysis (Use both)
-
-**Example: Workout performance by time of day (home timezone)**
-```sql
-SELECT 
-  EXTRACT(HOUR FROM start_time_local) as hour,
-  AVG(avg_hr_bpm) as avg_hr,
-  AVG(calories_kcal) as avg_calories
-FROM workouts
-WHERE tz_name = 'America/Los_Angeles'  -- Only home timezone workouts
-  OR tz_source = 'actual'              -- Or use actual timezone data
-GROUP BY hour
-ORDER BY hour
+pa.field("timestamp_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+pa.field("timestamp_local", pa.timestamp("us"), nullable=False),  # Naive
+pa.field("tz_name", pa.string(), nullable=True),
+pa.field("tz_source", pa.string(), nullable=True),
 ```
 
 ---
 
-## 6. Known Limitations & Mitigation
+## 6. Query Patterns
 
-### Limitation 1: Travel Days in minute_facts
-
-**Problem:** HAE CSV data from travel days has wrong timezone assumption
-
-**Impact:**
-- ~5% of data (if you travel 2-3 weeks per year)
-- Affects: minute_facts, daily_summary
-- Does NOT affect: workouts (Strategy B)
-
-**Mitigation:**
-```sql
--- Option 1: Manual travel log table
-CREATE TABLE travel_periods (
-  start_date DATE,
-  end_date DATE,
-  actual_timezone STRING
-);
-
--- Option 2: Flag and filter
-SELECT * FROM minute_facts
-WHERE date NOT IN (SELECT date FROM travel_periods);
-
--- Option 3: Accept the limitation
--- For most analyses, 5% noise is acceptable
-```
-
-### Limitation 2: Timezone Changes (Moving)
-
-**Problem:** If you move to a new timezone, old assumption is wrong
-
-**Solution:** 
-1. Update `LOCAL_TIMEZONE` config
-2. **Do NOT re-ingest old data** (would corrupt UTC)
-3. Document timezone change date
-4. Filter analyses: "Data from Seattle era vs. Austin era"
+### UTC-based Queries (Pipeline Operations)
 
 ```python
-# config.yaml
-timezone:
-  default: "America/Los_Angeles"
-  changes:
-    - before: "2025-06-01"
-      timezone: "America/Los_Angeles"
-    - after: "2025-06-01"
-      timezone: "America/Chicago"
-```
+# Time-series joins
+df = df_workouts.merge(df_minute_facts, on='timestamp_utc')
 
-### Limitation 3: DST Transitions
-
-**Problem:** Ambiguous or nonexistent times during DST changes
-
-**Solution:** Already handled by `ambiguous='infer'` and `nonexistent='shift_forward'`
-
-**Verification:**
-```python
-# Test DST transitions
-test_dates = [
-    '2024-03-10 02:30:00',  # Spring forward (nonexistent)
-    '2024-11-03 01:30:00',  # Fall back (ambiguous)
+# Date range filtering
+df = df[
+    (df['timestamp_utc'] >= '2025-01-01') &
+    (df['timestamp_utc'] < '2025-02-01')
 ]
-for date_str in test_dates:
-    dt = pd.to_datetime(date_str)
-    local = dt.tz_localize('America/Los_Angeles', 
-                          ambiguous='infer', 
-                          nonexistent='shift_forward')
-    print(f"{date_str} → {local} → {local.tz_convert('UTC')}")
+
+# Deduplication
+df = df.drop_duplicates(subset=['timestamp_utc', 'source'])
+```
+
+### Local Time Queries (Circadian Analysis)
+
+```python
+# Hour-of-day patterns
+df['hour_local'] = pd.to_datetime(df['timestamp_local']).dt.hour
+hourly_avg = df.groupby('hour_local')['metric'].mean()
+
+# Bedtime analysis (after 10 PM)
+df['time_local'] = pd.to_datetime(df['timestamp_local']).dt.time
+late_night = df[df['time_local'] >= datetime.time(22, 0)]
+
+# Day-of-week patterns
+df['dow_local'] = pd.to_datetime(df['timestamp_local']).dt.day_name()
+weekly = df.groupby('dow_local')['metric'].mean()
 ```
 
 ---
 
-## 7. Configuration
+## 7. Configuration (config.yaml)
 
-### config.yaml
 ```yaml
 timezone:
-  # Primary timezone for Strategy A (assumed timezone)
+  # Your home timezone for Strategy A ingestion
   default: "America/Los_Angeles"
   
-  # Strategy assignments
-  strategy_a_sources:
-    - HAE_CSV
-    - HAE_Daily_JSON
-  
-  strategy_b_sources:
-    - HAE_Workout_JSON
-    - Concept2
-    - JEFIT
-  
-  # Historical timezone changes (if you moved)
+  # Optional: Historical timezone changes (if you moved)
   changes:
     - before: "2025-06-01"
       timezone: "America/Los_Angeles"
       notes: "Seattle era"
-    # - after: "2025-06-01"
-    #   timezone: "America/Chicago"
-    #   notes: "Moved to Austin"
+    - after: "2025-06-01"
+      timezone: "America/Chicago"
+      notes: "Moved to Austin"
   
-  # Known travel periods (optional, for filtering)
+  # Optional: Known travel periods (for filtering in analysis)
   travel_periods:
     - start: "2025-03-15"
       end: "2025-03-22"
       timezone: "Europe/London"
       notes: "London vacation"
+
+# Strategy assignment (for reference only)
+strategy_a_sources:
+  - HAE_CSV
+  - HAE_JSON  # Daily aggregates
+  - JEFIT
+
+strategy_b_sources:
+  - HAE_JSON  # Workouts only
+  - Concept2
 ```
 
 ---
 
-## 8. Testing Requirements
+## 8. Travel Day Handling
 
-### Unit Tests
+### Problem
+**Strategy A sources** (HAE CSV, JEFIT) will have **incorrect local times** on travel days.
 
-**Test DST transitions:**
+### Solution Options
+
+**Option 1: Accept Inconsistency (Recommended)**
+- Travel days are ~5% of data
+- Most analyses are home-based anyway
+- Document travel periods in config.yaml for filtering
+
+**Option 2: Manual Correction**
 ```python
-def test_dst_spring_forward():
-    # 2024-03-10 02:30 doesn't exist in America/Los_Angeles
-    dt = pd.to_datetime('2024-03-10 02:30:00')
-    local = dt.tz_localize('America/Los_Angeles', nonexistent='shift_forward')
-    assert local.hour == 3  # Should shift to 03:00
-    
-def test_dst_fall_back():
-    # 2024-11-03 01:30 is ambiguous
-    dt = pd.to_datetime('2024-11-03 01:30:00')
-    local = dt.tz_localize('America/Los_Angeles', ambiguous='infer')
-    assert local is not None  # Should resolve to one of the two
+# After ingestion, update specific date ranges with correct timezone
+travel_mask = (
+    (df['date'] >= '2025-03-15') &
+    (df['date'] <= '2025-03-22')
+)
+df.loc[travel_mask, 'tz_name'] = 'Europe/London'
+
+# Recompute local and UTC times
+df.loc[travel_mask, 'timestamp_local'] = ...
+df.loc[travel_mask, 'timestamp_utc'] = ...
 ```
 
-**Test Strategy A:**
+**Option 3: Travel Log Integration (Future)**
 ```python
-def test_assumed_timezone_ingestion():
-    df = pd.DataFrame({
-        'timestamp': ['2025-10-30 08:00:00', '2025-10-30 09:00:00']
-    })
-    result = ingest_with_assumed_timezone(df, 'HAE_CSV')
-    
-    assert result['tz_name'].iloc[0] == 'America/Los_Angeles'
-    assert result['tz_source'].iloc[0] == 'assumed'
-    assert result['timestamp_utc'] is not None
-```
+# Load travel log
+travel_log = pd.read_csv('travel_periods.csv')
 
-**Test Strategy B:**
-```python
-def test_rich_timezone_ingestion():
-    record = {
-        'date': '2025-10-30 13:58:00',
-        'timezone': 'America/Los_Angeles'
-    }
-    result = ingest_with_rich_timezone(record)
-    
-    assert result['tz_name'] == 'America/Los_Angeles'
-    assert result['tz_source'] == 'actual'
-    assert result['timestamp_utc'] is not None
-```
-
-### Integration Tests
-
-**Test travel day scenario:**
-```python
-def test_travel_day_consistency():
-    # Simulate export in St. Louis with Seattle data
-    seattle_data = "2025-10-30 08:00:00"  # Morning in Seattle
-    
-    # Strategy A should use America/Los_Angeles regardless
-    result = ingest_with_assumed_timezone(seattle_data, 'HAE_CSV')
-    
-    # Verify it used Seattle timezone, not St. Louis
-    assert result['tz_name'] == 'America/Los_Angeles'
-    # The UTC time should be Seattle's UTC offset
+# Join on date and apply correct timezone
+df = df.merge(travel_log, on='date', how='left')
+df['tz_name'] = df['travel_timezone'].fillna(df['tz_name'])
 ```
 
 ---
 
-## 9. Migration Guide
+## 9. Validation
 
-### Existing Data
+### Timezone Consistency Checks
 
-If you have already ingested data with a different strategy:
+```python
+# Check for missing timezone metadata
+assert df['tz_name'].notna().all(), "Missing tz_name values"
+assert df['tz_source'].isin(['assumed', 'actual']).all(), "Invalid tz_source"
 
-**Option 1: Accept and document**
-- Old data used different logic → document cutoff date
-- New data uses this logic → all new ingestions consistent
+# Verify UTC/local alignment
+df_check = df.copy()
+df_check['timestamp_local_tz'] = pd.to_datetime(
+    df_check['timestamp_local']
+).dt.tz_localize(df_check['tz_name'])
+df_check['timestamp_utc_derived'] = df_check['timestamp_local_tz'].dt.tz_convert('UTC')
 
-**Option 2: Re-ingest** (only if critical)
-```bash
-# 1. Back up current data
-cp -r Data/Parquet Data/Parquet.backup
+# Allow small differences due to rounding
+time_diff = (df_check['timestamp_utc'] - df_check['timestamp_utc_derived']).abs()
+assert (time_diff < pd.Timedelta(seconds=1)).all(), "UTC/local mismatch detected"
+```
 
-# 2. Delete existing partitions
-rm -rf Data/Parquet/minute_facts/*
-rm -rf Data/Parquet/daily_summary/*
+### DST Transition Checks
 
-# 3. Re-run ingestion with new logic
-make ingest-all
+```python
+# Count records per day (should be ~1440 for most days)
+daily_counts = df.groupby(df['timestamp_local'].dt.date).size()
 
-# 4. Verify consistency
-make test-timestamp-integrity
+# Spring forward: ~1380 minutes (23 hours)
+spring_forward_days = daily_counts[daily_counts < 1400]
+
+# Fall back: ~1500 minutes (25 hours)
+fall_back_days = daily_counts[daily_counts > 1460]
+
+# Verify these align with actual DST dates
 ```
 
 ---
 
 ## 10. Decision Record
 
-**Date:** 2025-11-01  
-**Decision:** Adopt hybrid timestamp strategy (Strategy A + Strategy B)  
-**Rationale:** 
-- HAE CSV/JSON sources are fundamentally lossy
-- Travel day problem is unfixable at source level
-- Consistency (99% correct, 1% knowingly wrong) beats chaos (99% correct, 1% randomly corrupted)
-- Workouts/Concept2/JEFIT have rich timezone data - use it
-- Three-timestamp schema enables both strategies
+### Rationale
 
-**Alternatives Considered:**
-1. **Trust all source timezones** - Rejected: Creates corrupt data on travel days
-2. **Parse and correct travel days** - Rejected: Impossible without external travel log
-3. **Use UTC only** - Rejected: Breaks circadian analysis
-4. **Store only local time** - Rejected: Breaks joins and deduplication
+**Why hybrid strategy?**
+- HAE exports lose per-event timezone (corrupted on travel days)
+- Workouts/Concept2 have rich timezone data - use it
+- JEFIT exports lack timezone information entirely
+- Different sources require different handling
 
-**Trade-offs Accepted:**
-- Travel day data in minute_facts will be wrong (~5% of data)
-- Acceptable because: consistent, documentable, filterable, correctable later
+**Why not parse HAE timezone?**
+- Export-time timezone ≠ event-time timezone
+- Leads to random corruption on travel days
+- Consistent wrong data > randomly corrupted data
 
-**Review Date:** 2026-01-01 (after 2 months of usage)
+**Why store three timestamps?**
+- UTC: Pipeline operations (joins, dedup, sorting)
+- Local: Circadian analysis (hour-of-day, bedtime)
+- Timezone: Makes local unambiguous + documents quality
 
----
+**Why assume home timezone?**
+- 95% of data is at home (empirically observed)
+- Travel day errors are acceptable trade-off
+- Enables clean circadian analysis without noise
+- Can be corrected later with manual travel log
 
-## 11. References
-
-**Python timezone handling:**
-- `zoneinfo.ZoneInfo` - IANA timezone database
-- `pandas.Series.dt.tz_localize()` - Add timezone to naive timestamps
-- `pandas.Series.dt.tz_convert()` - Convert between timezones
-
-**DST rules:**
-- Spring forward: Second Sunday in March, 2:00 AM → 3:00 AM
-- Fall back: First Sunday in November, 2:00 AM → 1:00 AM (repeated)
-
-**IANA timezone database:**
-- Canonical names: "America/Los_Angeles", "Europe/London", "Asia/Tokyo"
-- Includes all historical DST rule changes
+**Why JEFIT uses Strategy A:**
+- JEFIT CSV exports contain only naive timestamps
+- No per-workout timezone information available
+- Must assume user's home timezone for consistency
+- Same trade-off as HAE CSV: correct at home, wrong when traveling
 
 ---
 
-## Appendix A: Example Implementations
+## 11. Implementation Checklist
 
-### Full Strategy A Implementation
-```python
-# src/pipeline/ingest/csv_delta.py
+When adding a new data source, determine:
 
-from zoneinfo import ZoneInfo
-import pandas as pd
-
-LOCAL_TIMEZONE = ZoneInfo("America/Los_Angeles")
-
-def process_hae_csv(file_path):
-    """Strategy A: Assumed timezone ingestion"""
-    
-    # 1. Read CSV
-    df = pd.read_csv(file_path)
-    
-    # 2. Parse timestamp as naive
-    df['timestamp_local'] = pd.to_datetime(
-        df['Start'],  # Or whatever the column name is
-        format='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # 3. Localize to assumed timezone (handles DST)
-    df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(
-        LOCAL_TIMEZONE,
-        ambiguous='infer',
-        nonexistent='shift_forward'
-    )
-    
-    # 4. Convert to UTC
-    df['timestamp_utc'] = df['timestamp_local'].dt.tz_convert('UTC')
-    
-    # 5. Add metadata
-    df['tz_name'] = str(LOCAL_TIMEZONE)
-    df['tz_source'] = 'assumed'
-    df['source'] = 'HAE_CSV'
-    
-    # 6. Convert local back to naive for Parquet
-    df['timestamp_local'] = df['timestamp_local'].dt.tz_localize(None)
-    
-    return df
-```
-
-### Full Strategy B Implementation
-```python
-# src/pipeline/ingest/concept2_api.py
-
-from zoneinfo import ZoneInfo
-import pandas as pd
-
-def process_concept2_workout(workout_json):
-    """Strategy B: Rich timezone ingestion"""
-    
-    # 1. Extract timezone and timestamp from API response
-    tz_name = workout_json['timezone']
-    timestamp_local_str = workout_json['date']
-    
-    # 2. Parse as naive
-    timestamp_local = pd.to_datetime(timestamp_local_str)
-    
-    # 3. Localize to actual timezone from source
-    timestamp_local = timestamp_local.tz_localize(
-        ZoneInfo(tz_name),
-        ambiguous='infer',
-        nonexistent='shift_forward'
-    )
-    
-    # 4. Convert to UTC
-    timestamp_utc = timestamp_local.tz_convert('UTC')
-    
-    # 5. Build workout record
-    workout_record = {
-        'workout_id': workout_json['id'],
-        'start_time_local': timestamp_local.tz_localize(None),  # Naive for Parquet
-        'start_time_utc': timestamp_utc,
-        'timezone': tz_name,
-        'tz_source': 'actual',
-        'source': 'Concept2',
-        # ... other fields
-    }
-    
-    return workout_record
-```
+- [ ] Does source provide per-event timezone? (Yes → Strategy B, No → Strategy A)
+- [ ] If Strategy A: Which home timezone to assume?
+- [ ] If Strategy B: Where is timezone stored in source data?
+- [ ] Are timestamps already in UTC or local time?
+- [ ] How to handle DST transitions?
+- [ ] Which tables will use these timestamps?
+- [ ] Update config.yaml with strategy assignment
+- [ ] Add validation checks for this source
+- [ ] Document any known limitations
 
 ---
 
-**END OF DOCUMENT**
+## 12. Future Enhancements
 
-This is the canonical source of truth for timestamp handling in the Health Data Pipeline.  
-All implementation code must follow these specifications.
+- **Travel log integration:** Automatically correct travel day timezones
+- **Timezone history tracking:** Handle users who move between timezones
+- **Multi-timezone support:** For users who travel frequently
+- **Automatic DST detection:** Validate DST transitions against timezone database
+- **Query helpers:** Functions for common timezone operations
+
+---
+
+## References
+
+- **IANA Timezone Database:** https://www.iana.org/time-zones
+- **Python zoneinfo:** https://docs.python.org/3/library/zoneinfo.html
+- **pandas timezone handling:** https://pandas.pydata.org/docs/user_guide/timeseries.html
+- **PyArrow timestamp limitations:** https://arrow.apache.org/docs/python/timestamps.html
+
