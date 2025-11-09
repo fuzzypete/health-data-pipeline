@@ -166,9 +166,12 @@ def _find_water_fl_oz(df: pd.DataFrame) -> Optional[pd.Series]:
             w = pd.to_numeric(df[col], errors="coerce")
             if "ml" in cl:
                 w = w / ML_PER_FL_OZ
+          
+            # Round to the nearest whole number and cast to nullable Int32
+            w = w.round(0).astype('Int32') 
+          
             return w
     return None
-
 
 # ---------------------------------------------------------------------
 # Daily summary (midnight-first, then fallback)

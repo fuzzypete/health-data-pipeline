@@ -40,7 +40,7 @@ fmt:
 	black .
 
 test:
-	pytest -q
+	poetry run pytest -q
 
 validate:
 	$(PYTHON) -m $(MODULE_ROOT).validate
