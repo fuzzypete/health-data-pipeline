@@ -8,12 +8,12 @@ from __future__ import annotations
 import pyarrow as pa
 
 # Valid source enumerations
-SOURCES = {"HAE_CSV", "HAE_JSON", "Concept2", "JEFIT"}
+SOURCES = {"HAE_CSV", "HAE_JSON", "Concept2", "JEFIT", "HAE_CSV_Automation", "HAE_CSV_Quick"}
 
 
 # ============================================================================
 # Minute-level health metrics (wide table)
-# ============================================================================
+# =V==========================================================================
 
 minute_facts_base = pa.schema([
     # Timestamps (Strategy A - assumed timezone)
@@ -22,7 +22,7 @@ minute_facts_base = pa.schema([
     pa.field("tz_name", pa.string(), nullable=True),
     pa.field("tz_source", pa.string(), nullable=True),  # 'assumed' or 'actual'
     
-    # Common metrics (extensible - add more as needed)
+    # --- Original Common Metrics ---
     pa.field("steps", pa.int32(), nullable=True),
     pa.field("heart_rate_avg", pa.float64(), nullable=True),
     pa.field("heart_rate_min", pa.float64(), nullable=True),
@@ -30,6 +30,51 @@ minute_facts_base = pa.schema([
     pa.field("active_energy_kcal", pa.float64(), nullable=True),
     pa.field("basal_energy_kcal", pa.float64(), nullable=True),
     pa.field("distance_mi", pa.float64(), nullable=True),
+    pa.field("flights_climbed", pa.int32(), nullable=True),
+
+    # --- NEW METRICS FROM HAE AUTOMATION ---
+    pa.field("apple_exercise_time_min", pa.int32(), nullable=True),
+    pa.field("sleeping_wrist_temp_degf", pa.float64(), nullable=True),
+    pa.field("blood_glucose_mg_dl", pa.float64(), nullable=True),
+    pa.field("blood_oxygen_saturation_pct", pa.float64(), nullable=True),
+    pa.field("blood_pressure_diastolic_mmhg", pa.float64(), nullable=True),
+    pa.field("blood_pressure_systolic_mmhg", pa.float64(), nullable=True),
+    pa.field("body_mass_index_count", pa.float64(), nullable=True),
+    pa.field("carbohydrates_g", pa.float64(), nullable=True),
+    pa.field("cardio_recovery_count_min", pa.float64(), nullable=True),
+    pa.field("cycling_distance_mi", pa.float64(), nullable=True),
+    pa.field("calories_kcal", pa.float64(), nullable=True), # 'Dietary Energy (kcal)'
+    pa.field("fiber_g", pa.float64(), nullable=True),
+    pa.field("hrv_ms", pa.float64(), nullable=True),
+    pa.field("lean_body_mass_lb", pa.float64(), nullable=True),
+    pa.field("mindful_minutes_min", pa.int32(), nullable=True),
+    pa.field("physical_effort_kcal_hr_kg", pa.float64(), nullable=True),
+    pa.field("protein_g", pa.float64(), nullable=True),
+    pa.field("respiratory_rate_count_min", pa.float64(), nullable=True),
+    pa.field("resting_hr_bpm", pa.float64(), nullable=True),
+    
+    # Sleep Analysis (raw hours, for potential analysis)
+    pa.field("sleep_asleep_hr", pa.float64(), nullable=True),
+    pa.field("sleep_awake_hr", pa.float64(), nullable=True),
+    pa.field("sleep_core_hr", pa.float64(), nullable=True),
+    pa.field("sleep_deep_hr", pa.float64(), nullable=True),
+    pa.field("sleep_in_bed_hr", pa.float64(), nullable=True),
+    pa.field("sleep_rem_hr", pa.float64(), nullable=True),
+    pa.field("sleep_total_hr", pa.float64(), nullable=True),
+    
+    # Sleep Analysis (converted minutes, for daily summary)
+    pa.field("sleep_minutes_asleep", pa.int32(), nullable=True),
+    pa.field("sleep_minutes_in_bed", pa.int32(), nullable=True),
+    pa.field("sleep_score", pa.float64(), nullable=True),
+    
+    pa.field("time_in_daylight_min", pa.int32(), nullable=True),
+    pa.field("total_fat_g", pa.float64(), nullable=True),
+    pa.field("vo2_max_ml_kg_min", pa.float64(), nullable=True),
+    pa.field("walking_running_distance_mi", pa.float64(), nullable=True),
+    pa.field("water_fl_oz", pa.float64(), nullable=True),
+    pa.field("weight_lb", pa.float64(), nullable=True),
+    pa.field("body_fat_pct", pa.float64(), nullable=True),
+    pa.field("temperature_degF", pa.float64(), nullable=True),
     
     # Lineage
     pa.field("source", pa.string(), nullable=False),
@@ -109,7 +154,7 @@ workouts_schema = pa.schema([
     pa.field("start_time_local", pa.timestamp("us"), nullable=False),
     pa.field("end_time_local", pa.timestamp("us"), nullable=True),
     pa.field("timezone", pa.string(), nullable=True),
-    pa.field("tz_source", pa.string(), nullable=True),  # Always 'actual' for workouts
+    pa.field("tz_source", pa.string(), nullable=True),  # 'actual' or 'assumed'
     
     pa.field("duration_s", pa.int64(), nullable=True),
     pa.field("device_id", pa.string(), nullable=True),
@@ -118,7 +163,7 @@ workouts_schema = pa.schema([
     # Cardio fields
     pa.field("distance_m", pa.float64(), nullable=True),
     pa.field("avg_hr_bpm", pa.float64(), nullable=True),
-    pa.field("max_hr_bpm", pa.float64(), nullable=True),
+    pa.field("max__hr_bpm", pa.float64(), nullable=True),
     pa.field("min_hr_bpm", pa.float64(), nullable=True),
     pa.field("calories_kcal", pa.float64(), nullable=True),
     pa.field("avg_pace_sec_per_500m", pa.float64(), nullable=True),
@@ -342,4 +387,3 @@ def get_schema(table_name: str) -> pa.Schema:
     if table_name not in SCHEMAS:
         raise ValueError(f"Unknown table: {table_name}. Available: {list(SCHEMAS.keys())}")
     return SCHEMAS[table_name]
-

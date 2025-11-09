@@ -1,7 +1,4 @@
-#from __future__ import annotations
-
-from pathlib import Path
-DATA_DIR = Path('Data')
+# src/pipeline/paths.py
 """
 Path definitions for Health Data Pipeline.
 
@@ -26,6 +23,7 @@ ERROR_ROOT = config.get_data_dir('error')           # Data/Error/
 RAW_HAE_DIR = RAW_ROOT / "HAE"
 RAW_HAE_CSV_DIR = RAW_HAE_DIR / "CSV"
 RAW_HAE_JSON_DIR = RAW_HAE_DIR / "JSON"
+RAW_HAE_QUICK_DIR = RAW_HAE_DIR / "Quick"  # <-- ADDED
 RAW_JEFIT_DIR = RAW_ROOT / "JEFIT"
 RAW_CONCEPT2_DIR = RAW_ROOT / "Concept2"
 RAW_LABS_DIR = RAW_ROOT / "labs"
@@ -34,6 +32,7 @@ RAW_LABS_DIR = RAW_ROOT / "labs"
 ARCHIVE_HAE_DIR = ARCHIVE_ROOT / "HAE"
 ARCHIVE_HAE_CSV_DIR = ARCHIVE_HAE_DIR / "CSV"
 ARCHIVE_HAE_JSON_DIR = ARCHIVE_HAE_DIR / "JSON"
+ARCHIVE_HAE_QUICK_DIR = ARCHIVE_HAE_DIR / "Quick"  # <-- ADDED
 ARCHIVE_JEFIT_DIR = ARCHIVE_ROOT / "JEFIT"
 ARCHIVE_CONCEPT2_DIR = ARCHIVE_ROOT / "Concept2"
 ARCHIVE_LABS_DIR = ARCHIVE_ROOT / "labs"
@@ -53,10 +52,12 @@ PROTOCOL_HISTORY_PATH = PARQUET_ROOT / "protocol_history"
 for path in [
     RAW_HAE_CSV_DIR,
     RAW_HAE_JSON_DIR,
+    RAW_HAE_QUICK_DIR,  
     RAW_JEFIT_DIR,
     RAW_CONCEPT2_DIR,
     ARCHIVE_HAE_CSV_DIR,
     ARCHIVE_HAE_JSON_DIR,
+    ARCHIVE_HAE_QUICK_DIR,  
     ARCHIVE_JEFIT_DIR,
     ARCHIVE_CONCEPT2_DIR,
     ARCHIVE_LABS_DIR,
@@ -74,9 +75,11 @@ __all__ = [
     "RAW_HAE_DIR",
     "RAW_HAE_CSV_DIR",
     "RAW_HAE_JSON_DIR",
+    "RAW_HAE_QUICK_DIR",  
     "ARCHIVE_HAE_DIR",
     "ARCHIVE_HAE_CSV_DIR",
     "ARCHIVE_HAE_JSON_DIR",
+    "ARCHIVE_HAE_QUICK_DIR",  
     # JEFIT paths
     "RAW_JEFIT_DIR",
     "ARCHIVE_JEFIT_DIR",

@@ -9,16 +9,13 @@ export
 # ============================================================================
 
 PYTHON       := poetry run python
-MODULE_ROOT  := pipeline.ingest
+MODULE_ROOT  := src.pipeline.ingest
 PARQUET_DIR  := Data/Parquet
 DUCKDB_FILE  ?= Data/duck/health.duckdb
 
 # Default ingestion targets for 'make all'
-# This now fetches from Drive first, then runs all ingestions
-INGEST_TARGETS ?= fetch-all ingest-hae ingest-concept2-all ingest-jefit ingest-labs ingest-protocols
-
-# NOTE: All HDP_... (Drive config) variables have been removed.
-# They are now read by the fetch script from config.yaml and .env
+# UPDATED to include hae-quick
+INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2-all ingest-jefit ingest-labs ingest-protocols
 
 # ============================================================================
 # Development Environment
@@ -33,11 +30,12 @@ lock:
 	poetry lock --no-update
 
 lint:
-	ruff check .
-	black --check .
+	poetry run ruff check .
+	poetry run black --check .
 
 fmt:
-	black .
+	poetry run ruff check . --fix
+	poetry run black .
 
 test:
 	poetry run pytest -q
@@ -55,7 +53,7 @@ dev-shell:
 # Data Ingestion
 # ============================================================================
 
-.PHONY: ingest-hae ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
+.PHONY: ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
 .PHONY: ingest-jefit ingest-jefit-file test-jefit backfill-lactate
 .PHONY: ingest-labs ingest-protocols
 .PHONY: all reload show-ingest check-parquet
@@ -63,7 +61,16 @@ dev-shell:
 # --- HAE (Apple Health Export) ---
 
 ingest-hae:
+	@echo "--- Ingesting HAE Automation CSV (HealthMetrics-...) ---"
 	$(PYTHON) -m $(MODULE_ROOT).hae_csv
+
+ingest-hae-quick:
+	@echo "--- Ingesting HAE Quick Export CSV (HealthAutoExport-...) ---"
+	$(PYTHON) -m $(MODULE_ROOT).hae_quick_csv
+
+ingest-hae-workouts:
+	@echo "--- Ingesting HAE Workout JSON (Strategy B) ---"
+	$(PYTHON) -m $(MODULE_ROOT).hae_workouts
 
 # --- Concept2 (Rowing/Biking) ---
 
@@ -107,16 +114,16 @@ test-jefit:
 
 ingest-labs:
 	@echo "Ingesting Labs from downloaded Excel file..."
-	$(PYTHON) -m pipeline.ingest.labs_excel
+	$(PYTHON) -m $(MODULE_ROOT).labs_excel
 
 ingest-protocols:
 	@echo "Ingesting Protocols from downloaded Excel file..."
-	$(PYTHON) -m pipeline.ingest.protocol_excel
+	$(PYTHON) -m $(MODULE_ROOT).protocol_excel
 
 # --- Aggregates & Utilities ---
 
 show-ingest:
-	@echo "INGEST_TARGETS => $(INGEST_TARGETS)"
+	@echo "INGEST_TARGETS => $(INGST_TARGETS)"
 
 all: show-ingest
 	@set -e; \
@@ -132,7 +139,7 @@ reload: drop-parquet all
 
 check-parquet:
 	@echo "Checking Parquet table status..."
-	@$(PYTHON) check_parquet_status.py
+	@$(PYTHON) scripts/check_parquet_status.py
 
 # ============================================================================
 # Google Drive Fetching (NEW UNIFIED SECTION)
@@ -157,11 +164,6 @@ fetch-protocols:
 fetch-hae:
 	@echo "Fetching all HAE sources (hae_csv, hae_json, hae_quick) from Google Drive..."
 	$(PYTHON) $(FETCH_SCRIPT) hae_csv hae_json hae_quick
-
-# ============================================================================
-# Labs (Google Drive sync + ingestion)  <-- THIS SECTION IS NOW REMOVED
-# ============================================================================
-# (All old labs.* targets are gone)
 
 # ============================================================================
 # DuckDB (Local query engine)
@@ -241,7 +243,9 @@ help:
 	@echo "  dev-shell        - Open Poetry shell"
 	@echo ""
 	@echo "Ingestion - Primary:"
-	@echo "  ingest-hae              - Ingest HAE (Apple Health) CSV data from Data/Raw/HAE/CSV/"
+	@echo "  ingest-hae              - Ingest HAE Automation CSVs (HealthMetrics-...) from Data/Raw/HAE/CSV/"
+	@echo "  ingest-hae-quick        - Ingest HAE Quick Export CSVs (HealthAutoExport-...) from Data/Raw/HAE/Quick/"
+	@echo "  ingest-hae-workouts     - Ingest HAE Workout JSON from Data/Raw/HAE/JSON/"
 	@echo "  ingest-concept2         - Ingest last 50 Concept2 workouts via API"
 	@echo "  ingest-concept2-recent  - Ingest last 10 workouts (quick test)"
 	@echo "  ingest-concept2-all     - Ingest last 200 workouts (full sync)"
@@ -256,7 +260,7 @@ help:
 	@echo "  fetch-protocols         - Fetch 'protocols' source from Google Drive"
 	@echo "  fetch-hae               - Fetch all HAE sources (hae_csv, hae_json, hae_quick) from Drive"
 	@echo ""
-	@echo "Ingestion - Utilities:"
+	@echo "IngAestion - Utilities:"
 	@echo "  all              - Run all default targets: $(INGEST_TARGETS)"
 	@echo "  show-ingest      - Show which targets will run in 'make all'"
 	@echo "  check-parquet    - Check which Parquet tables exist + row counts"
@@ -280,7 +284,7 @@ help:
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "Quick Start:"
 	@echo "  1. make install"
-	@echo "  2. Configure .env with GOOGLE_APPLICATION_CREDENTIALS and HDP_... folder IDs"
+	@echo "  2. Configure config.yaml and .env with your settings and IDs"
 	@echo "  3. make all          # Fetch all data from Drive AND run all ingestions"
 	@echo "  4. make check-parquet # Verify data loaded"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

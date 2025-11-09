@@ -1,12 +1,12 @@
-# src/pipeline/ingest/hae_csv.py
+# src/pipeline/ingest/hae_quick_csv.py
 """
-HAE CSV ingestion - "Automation" (HealthMetrics)
+HAE CSV ingestion - "Quick Export"
 
-This script ingests **Automation** CSV files (e.g., "HealthMetrics-...")
-from the "Data/Raw/HAE/CSV/" directory.
+This script ingests **Quick Export** CSV files (e.g., "HealthAutoExport-...")
+from the "Data/Raw/HAE/Quick/" directory.
 
-It handles the minute-level format with ~40 columns and converts
-sleep data from hours to minutes.
+NOTE: This format is now identical to the "Automation" (HealthMetrics) format.
+It uses the minute-level map and converts sleep data from hours to minutes.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Iterable
 import pandas as pd
 from datetime import datetime, timezone
 
-from pipeline.paths import RAW_HAE_CSV_DIR, ARCHIVE_HAE_CSV_DIR
+from pipeline.paths import RAW_HAE_QUICK_DIR, ARCHIVE_HAE_QUICK_DIR
 from pipeline.common.config import get_home_timezone
 from pipeline.common.schema import get_schema
 # Import the shared "Load" logic
@@ -24,7 +24,7 @@ from pipeline.common.hae_csv_utils import run_hae_csv_pipeline
 
 log = logging.getLogger(__name__)
 
-DEFAULT_SOURCE = "HAE_CSV_Automation"
+DEFAULT_SOURCE = "HAE_CSV_Quick"
 
 # Get schemas once to build the "known columns" list
 try:
@@ -37,6 +37,7 @@ except ValueError as e:
 
 # ---------------------------------------------------------------------
 # Column crosswalk: **minute-level** (Automation "HealthMetrics...")
+# This is now used for BOTH Automation and Quick Export
 # ---------------------------------------------------------------------
 RENAME_MAP_AUTOMATION = {
     "Date/Time": "timestamp_local", # Common
@@ -86,6 +87,11 @@ RENAME_MAP_AUTOMATION = {
     'Sleep Analysis [In Bed] (hr)': 'sleep_in_bed_hr',
     'Sleep Analysis [REM] (hr)': 'sleep_rem_hr',
     'Sleep Analysis [Total] (hr)': 'sleep_total_hr',
+    
+    # Columns from the new Quick Export not in the Automation one
+    'Saturated Fat (g)': 'saturated_fat_g', # You may need to add this to schema.py if it's not there
+    'Walking Heart Rate Average (count/min)': 'walking_hr_avg_count_min', # You may need to add this
+    'Walking Speed (mi/hr)': 'walking_speed_mi_hr', # You may need to add this
 }
 
 # --- Master list of all known CANONICAL column names ---
@@ -96,7 +102,8 @@ if DAILY_SUMMARY_SCHEMA:
     ALL_KNOWN_CANONICAL_COLS.update(DAILY_SUMMARY_SCHEMA.names)
 ALL_KNOWN_CANONICAL_COLS.update([
     'sleep_asleep_hr', 'sleep_awake_hr', 'sleep_core_hr', 
-    'sleep_deep_hr', 'sleep_in_bed_hr', 'sleep_rem_hr', 'sleep_total_hr'
+    'sleep_deep_hr', 'sleep_in_bed_hr', 'sleep_rem_hr', 'sleep_total_hr',
+    'saturated_fat_g', 'walking_hr_avg_count_min', 'walking_speed_mi_hr'
 ])
 
 # ---------------------------------------------------------------------
@@ -104,13 +111,13 @@ ALL_KNOWN_CANONICAL_COLS.update([
 # ---------------------------------------------------------------------
 def _load_csv(csv_path: Path) -> pd.DataFrame:
     """
-    Load a raw "Automation" CSV from HAE.
-    Applies the automation-specific rename map and unit conversions.
+    Load a raw "Quick Export" CSV from HAE.
+    Applies the "Automation-style" rename map and unit conversions.
     """
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
-    
-    log.info("%s: Applying 'Automation' (HealthMetrics) map.", csv_path.name)
+
+    log.info("%s: Applying 'Automation-style' (HealthMetrics) map.", csv_path.name)
     df = df.rename(columns=RENAME_MAP_AUTOMATION)
     
     # --- Perform Unit Conversions (hr -> min) ---
@@ -145,11 +152,11 @@ def _iter_raw_csvs(raw_dir: Path) -> Iterable[Path]:
 # ---------------------------------------------------------------------
 def main() -> None:
     """
-    Process all CSV files in Data/Raw/HAE/CSV/
+    Process all CSV files in Data/Raw/HAE/Quick/
     """
-    files = list(_iter_raw_csvs(RAW_HAE_CSV_DIR))
+    files = list(_iter_raw_csvs(RAW_HAE_QUICK_DIR))
     if not files:
-        log.info("No CSV files found in %s", RAW_HAE_CSV_DIR)
+        log.info("No CSV files found in %s", RAW_HAE_QUICK_DIR)
         return
 
     processed = 0
@@ -166,7 +173,7 @@ def main() -> None:
             run_hae_csv_pipeline(f, df, DEFAULT_SOURCE, ingest_run_id, home_tz)
             
             # Optional: Move to archive after successful processing
-            # archive_path = ARCHIVE_HAE_CSV_DIR / f.name
+            # archive_path = ARCHIVE_HAE_QUICK_DIR / f.name
             # f.rename(archive_path)
             # log.info("Archived: %s → %s", f.name, archive_path)
             
