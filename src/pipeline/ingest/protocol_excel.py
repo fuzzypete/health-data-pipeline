@@ -14,6 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 
@@ -49,8 +50,7 @@ def read_protocol_sheet(input_path: Path, sheet_name: str) -> pd.DataFrame:
         log.error(f"Input file not found: {input_path}")
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    # --- THIS IS THE FIX ---
-    # The variable is 'input_path', not 'input_file'
+    # --- THIS FIXES THE NameError ---
     log.info(f"Reading protocols from '{input_path.name}' (Sheet: '{sheet_name}')...")
     # --- END FIX ---
     
@@ -60,41 +60,61 @@ def read_protocol_sheet(input_path: Path, sheet_name: str) -> pd.DataFrame:
     return df
 
 
+def _combine_notes(row: pd.Series, extra_cols: list[str]) -> str:
+    """Combine extra columns into a single notes string."""
+    notes_parts = []
+    
+    # Add extra context fields first
+    for col in extra_cols:
+        if col in row and pd.notna(row[col]):
+            notes_parts.append(f"{col.replace('_', ' ').title()}: {row[col]}")
+            
+    # Add the original notes
+    if 'notes' in row and pd.notna(row['notes']):
+        notes_parts.append(f"Notes: {row['notes']}")
+        
+    return " | ".join(notes_parts)
+
+
 def process_protocols(
     df: pd.DataFrame, source_name: str, ingest_run_id: str
 ) -> pd.DataFrame:
     """Clean, normalize, and add metadata to the protocol data."""
 
     schema = get_schema("protocol_history")
-    expected_cols = [
-        f.name
-        for f in schema
-        if f.name
-        not in ["protocol_id", "source", "ingest_time_utc", "ingest_run_id", "year"]
-    ]
-
-    # More comprehensive rename map
+    
+    # --- THIS IS THE FIX for COLUMN MISMATCH ---
+    # Map your 'Events' sheet columns (from Events.csv) to the schema names
     rename_map = {
-        "start": "start_date",
-        "start date": "start_date",
-        "end": "end_date",
-        "end date": "end_date",
-        "compound": "compound_name",
-        "compound name": "compound_name",
-        "type": "compound_type",
-        "compound type": "compound_type",
-        "unit": "dosage_unit",
-        "dosage unit": "dosage_unit",
+        "date": "start_date",
+        "category": "compound_type",
+        "dose": "dosage",
+        "units": "dosage_unit",
+        # 'compound_name', 'frequency', 'notes' are already correct
     }
     df = df.rename(columns=rename_map)
+    # --- END FIX ---
 
+    # Define schema columns and extra context columns
+    schema_cols = {f.name for f in schema}
+    # Find all columns from the Excel sheet that are NOT in our final schema
+    extra_context_cols = [
+        col for col in df.columns 
+        if col not in schema_cols and col not in rename_map.values()
+    ]
+    
+    if extra_context_cols:
+        log.info(f"Combining extra columns into notes: {extra_context_cols}")
+        # Apply the helper function to combine extra fields into the 'notes' column
+        df['notes'] = df.apply(_combine_notes, args=(extra_context_cols,), axis=1)
 
-    for col in expected_cols:
-        if col not in df.columns:
+    # Ensure all schema columns exist
+    for f in schema:
+        if f.name not in df.columns:
             log.warning(
-                f"Column '{col}' not found in Excel sheet. Adding as empty column."
+                f"Column '{f.name}' not found in Excel sheet. Adding as empty column."
             )
-            df[col] = None
+            df[f.name] = None
 
     # Parse dates
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce").dt.date
@@ -114,6 +134,7 @@ def process_protocols(
         df = df.dropna(subset=["compound_name"])
 
     if df.empty:
+        log.info("No valid protocol records left after filtering.")
         return pd.DataFrame()
 
     # Create protocol_id
@@ -131,8 +152,7 @@ def process_protocols(
     df = add_lineage_fields(df, source=source_name, ingest_run_id=ingest_run_id)
 
     # Add partition column (by year of start_date)
-    df_part = create_date_partition_column(df.copy(), "start_date", "date_str", "D")
-    df["year"] = pd.to_datetime(df_part["date_str"], errors='coerce').dt.year.astype(str)
+    df["year"] = pd.to_datetime(df["start_date"], errors='coerce').dt.year.astype(str)
 
     # Select and reorder columns to match schema
     df = df[[f.name for f in schema]]
