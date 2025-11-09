@@ -47,6 +47,7 @@ CARDIO_STROKES_PATH = PARQUET_ROOT / "cardio_strokes"
 LACTATE_PATH = PARQUET_ROOT / "lactate"
 RESISTANCE_SETS_PATH = PARQUET_ROOT / "resistance_sets"
 LABS_PATH = PARQUET_ROOT / "labs"
+PROTOCOL_HISTORY_PATH = PARQUET_ROOT / "protocol_history" 
 
 # Create directories on import
 for path in [
@@ -93,4 +94,5 @@ __all__ = [
     "CARDIO_STROKES_PATH",
     "RESISTANCE_SETS_PATH",
     "LABS_PATH",
+    "PROTOCOL_HISTORY_PATH",  
 ]

@@ -291,6 +291,37 @@ labs_schema = pa.schema([
 ])
 
 # ============================================================================
+# Protocol History (Supplements/Meds)
+# ============================================================================
+
+protocol_history_schema = pa.schema([
+    # Event identification
+    pa.field("protocol_id", pa.string(), nullable=False),
+    pa.field("start_date", pa.date32(), nullable=False),
+    pa.field("end_date", pa.date32(), nullable=True),  # NULL if ongoing
+    
+    # Compound details
+    pa.field("compound_name", pa.string(), nullable=False),
+    pa.field("compound_type", pa.string(), nullable=True),
+    pa.field("dosage", pa.float64(), nullable=True),
+    pa.field("dosage_unit", pa.string(), nullable=True),
+    pa.field("frequency", pa.string(), nullable=True),
+    
+    # Context
+    pa.field("reason", pa.string(), nullable=True),
+    pa.field("notes", pa.string(), nullable=True),
+    
+    # Lineage
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+    
+    # Hive partitioning
+    pa.field("year", pa.string(), nullable=True),
+])
+
+
+# ============================================================================
 # Schema registry (for convenience)
 # ============================================================================
 
@@ -303,8 +334,8 @@ SCHEMAS = {
     'cardio_strokes': cardio_strokes_schema,
     'resistance_sets': resistance_sets_schema,
     'lactate': lactate_schema, 
+    'protocol_history': protocol_history_schema, 
 }
-
 
 def get_schema(table_name: str) -> pa.Schema:
     """Get PyArrow schema by table name."""
