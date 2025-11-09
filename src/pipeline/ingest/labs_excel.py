@@ -1,29 +1,48 @@
 import argparse
 import hashlib
+import logging
+import sys
 from pathlib import Path
+from datetime import datetime, timezone
+
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from pipeline.paths import LABS_PATH, RAW_LABS_DIR
+# Add src to path to allow imports from pipeline.common
+sys.path.append(str(Path(__file__).parent.parent.parent))
+
+from pipeline.paths import LABS_PATH, RAW_ROOT
+from pipeline.common.schema import get_schema
+from pipeline.common.config import get_drive_source
+from pipeline.common.parquet_io import write_partitioned_dataset
 
 try:
     from pipeline.common.labs_normalization import parse_column_name, parse_lab_value, calculate_flag, get_reference_range
 except Exception:
     from src.pipeline.common.labs_normalization import parse_column_name, parse_lab_value, calculate_flag, get_reference_range  # type: ignore
 
+log = logging.getLogger("ingest_labs_excel")
 
 
 def _hash_lab_id(date_str: str, lab_name: str) -> str:
     base = f"{date_str}__{lab_name}".encode("utf-8")
     return hashlib.sha1(base).hexdigest()[:16]
 
-def read_excel_wide(path: str, sheet_name: str) -> pd.DataFrame:
-    df = pd.read_excel(path,sheet_name=sheet_name)
+def read_excel_wide(input_path: Path, sheet_name: str) -> pd.DataFrame:
+    """Read the labs data from the specified Excel sheet."""
+    if not input_path.exists():
+        log.error(f"Input file not found: {input_path}")
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+        
+    log.info(f"Reading labs from '{input_path.name}' (Sheet: '{sheet_name}')...")
+    df = pd.read_excel(input_path, sheet_name=sheet_name)
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-def melt_to_long(df: pd.DataFrame, source: str) -> pd.DataFrame:
+def melt_to_long(df: pd.DataFrame, source: str, ingest_run_id: str) -> pd.DataFrame:
+    """Melt the wide labs format to a long format."""
+    
     # Locate key columns
     def find_col(cands):
         for c in df.columns:
@@ -33,7 +52,7 @@ def melt_to_long(df: pd.DataFrame, source: str) -> pd.DataFrame:
 
     date_col = find_col({"date","collection date","draw date","collected","reported"}) or ("Date" if "Date" in df.columns else None)
     if date_col is None:
-        raise ValueError("Date column not found.")
+        raise ValueError("Date column not found in Excel sheet.")
 
     lab_col = find_col({"lab","lab name","provider","vendor"})
     reason_col = find_col({"reason","order reason","notes (visit)"})
@@ -70,46 +89,84 @@ def melt_to_long(df: pd.DataFrame, source: str) -> pd.DataFrame:
 
     long_df["source"] = source
     long_df["ingest_time_utc"] = pd.Timestamp.utcnow()
-    if "ingest_run_id" not in long_df.columns:
-        long_df["ingest_run_id"] = None
+    long_df["ingest_run_id"] = ingest_run_id
 
-    cols = ["lab_id","date","lab_name","reason","marker","value","value_text","unit","ref_low","ref_high","flag","source","ingest_time_utc","ingest_run_id","year"]
-    return long_df[cols]
-
-def write_parquet(df: pd.DataFrame):
-    table = pa.Table.from_pandas(df)
-    pq.write_to_dataset(table, root_path=LABS_PATH, partition_cols=["year"])
+    # Select and reorder columns to match schema
+    schema = get_schema("labs")
+    long_df = long_df[[f.name for f in schema]]
+    
+    return long_df
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default=None, help="Path to labs Excel file. If not provided, auto-scans for latest Labs fetch in raw data dir.")
-    ap.add_argument("--sheet", default="Lab Results", help="Worksheet name or index to read")
-    ap.add_argument("--run-id", default=None)
-    args = ap.parse_args()
+    # --- Get defaults from config.yaml ---
+    labs_config = get_drive_source("labs")
+    if not labs_config:
+        log.error("Missing 'labs' section in config.yaml drive_sources")
+        sys.exit(1)
 
-    # Determine which file to process
-    if args.input:
-        input = Path(args.input)
-    else:
-        # Auto-scan for latest LABS export
-        labs_files = list(RAW_LABS_DIR.glob("*.csv"))
-        if not labs_files:
-            print(f"❌ No Excel files found in {RAW_LABS_DIR}")
-            print(f"   Place LABS exports in this directory or specify path explicitly.")
-            return 1
-        input = max(labs_files, key=lambda p: p.stat().st_mtime)
-        log.info(f"Auto-detected latest Labs excel: {input.name}")
+    default_path = Path(
+        labs_config.get(
+            "output_path", "Data/Raw/labs/labs-master-latest.xlsx"
+        )
+    )
+    default_sheet = labs_config.get("sheet_name", "Lab Results")
+    # --- End config load ---
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--input",
+        type=Path,
+        default=default_path,
+        help=f"Path to labs Excel file. Default: {default_path}"
+    )
+    ap.add_argument(
+        "--sheet", 
+        default=default_sheet, 
+        help=f"Worksheet name to read. Default: {default_sheet}"
+    )
+    ap.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = ap.parse_args()
     
-    if not input.exists():
-        print(f"❌ File not found: {input}")
-        return 1
-    
-    df_wide = read_excel_wide(input, sheet_name=args.sheet)
-    df_long = melt_to_long(df_wide, Path(input).name)
-    if args.run_id:
-        df_long["ingest_run_id"] = args.run_id
-    write_parquet(df_long)
-    print(f"Ingestion complete: {len(df_long['lab_id'].unique())} visits, {len(df_long)} results")
+    if args.debug:
+        logging.getLogger("pipeline").setLevel(logging.DEBUG)
+
+    ingest_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    try:
+        # --- THIS IS THE FIX ---
+        # Resolve the path from the project root (where make is run)
+        input_file = Path(args.input).resolve()
+        # --- END FIX ---
+        
+        df_wide = read_excel_wide(input_file, sheet_name=args.sheet)
+        df_long = melt_to_long(df_wide, input_file.name, ingest_run_id)
+
+        if df_long.empty:
+            log.info("No valid lab records found. Nothing to write.")
+            return
+
+        table = pa.Table.from_pandas(
+            df_long, schema=get_schema("labs"), preserve_index=False
+        )
+        
+        write_partitioned_dataset(
+            table, 
+            root_path=LABS_PATH, 
+            partition_cols=["year"],
+            schema=get_schema("labs"),
+            mode="delete_matching" # Overwrite partitions
+        )
+        log.info(f"✅ Ingestion complete: {len(df_long['lab_id'].unique())} visits, {len(df_long)} results")
+
+    except Exception as e:
+        log.exception(f"Labs ingestion failed: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
+    if not log.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)-7s] %(message)s"
+        )
     main()
