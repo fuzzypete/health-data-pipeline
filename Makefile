@@ -15,7 +15,6 @@ DUCKDB_FILE  ?= Data/duck/health.duckdb
 START_DATE   ?= $(shell date -d '3 days ago' +%Y-%m-%d) # Default: 3 days ago
 
 # Default ingestion targets for 'make all'
-# This list is correct. 'ingest-oura' will trigger the fetch.
 INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2-all ingest-oura ingest-jefit ingest-labs ingest-protocols
 
 # ============================================================================
@@ -91,13 +90,13 @@ backfill-lactate:
 	@echo "Backfilling lactate measurements from Concept2 comments..."
 	poetry run python scripts/backfill_lactate.py
 
-# --- Oura (MODIFIED) ---
+# --- Oura ---
 
-ingest-oura: fetch-oura # <-- This target now depends on fetch-oura
+ingest-oura: fetch-oura
 	@echo "--- Ingesting Oura JSON into Parquet oura_summary ---"
 	$(PYTHON) -m $(MODULE_ROOT).oura_json
 
-fetch-oura: # <-- Renamed from ingest-oura
+fetch-oura:
 	@echo "--- Fetching Oura data (from $(START_DATE)) ---"
 	@poetry run python scripts/fetch_oura_history.py --start-date $(START_DATE)
 
@@ -138,7 +137,7 @@ rebuild-history: clean-db clean-parquet fetch build-db create-views
 	@echo "--- 🚀 Historical rebuild complete! ---"	
 
 show-ingest:
-	@echo "INGEST_TARGETS => $(INGST_TARGETS)"
+	@echo "INGEST_TARGETS => $(INGEST_TARGETS)"
 
 all: show-ingest
 	@set -e; \
@@ -194,24 +193,39 @@ fetch-hae:
 
 .PHONY: duck.init duck.views duck.query
 
-CREATE_VIEWS_SQL ?= scripts/sql/create-views.sql
+# --- THIS IS THE NEW, ROBUST DuckDB SECTION ---
+PROJECT_ROOT     := $(shell pwd)
+PARQUET_ABS_PATH := $(PROJECT_ROOT)/$(PARQUET_DIR)
+DUCKDB_DIR       := $(dir $(DUCKDB_FILE))
+DUCKDB_BASENAME  := $(notdir $(DUCKDB_FILE))
 
-duck.init:
-	@mkdir -p $(dir $(DUCKDB_FILE))
-	@mkdir -p scripts/sql
-	@test -f "$(CREATE_VIEWS_SQL)" || (echo "❌ Missing $(CREATE_VIEWS_SQL). Create it first."; exit 1)
+# Source template and the temporary, generated SQL file
+SQL_TEMPLATE     := scripts/sql/create-views.sql.template
+SQL_RUN_FILE     := $(DUCKDB_DIR)/.create_views_run.sql
+
+# This rule generates the SQL script with absolute paths
+$(SQL_RUN_FILE): $(SQL_TEMPLATE)
+	@echo "--- Generating SQL script with absolute paths ---"
+	@# Use a delimiter that's not in a file path (like '|')
+	@sed 's|__PARQUET_ROOT__|$(PARQUET_ABS_PATH)|g' $(SQL_TEMPLATE) > $(SQL_RUN_FILE)
+
+duck.init: $(SQL_RUN_FILE)
+	@mkdir -p $(DUCKDB_DIR)
 	@echo "Creating/initializing $(DUCKDB_FILE)…"
-	poetry run duckdb "$(DUCKDB_FILE)" -init "$(CREATE_VIEWS_SQL)" -c "SELECT 'ok'"
+	cd $(DUCKDB_DIR) && poetry run duckdb "$(DUCKDB_BASENAME)" -init ".create_views_run.sql" -c "SELECT 'ok'"
+	@rm -f $(SQL_RUN_FILE)
 
-duck.views:
-	@test -f "$(CREATE_VIEWS_SQL)" || (echo "❌ Missing $(CREATE_VIEWS_SQL)"; exit 1)
-	@echo "Applying views from $(CREATE_VIEWS_SQL)…"
-	poetry run duckdb "$(DUCKDB_FILE)" -init "$(CREATE_VIEWS_SQL)" -c "SELECT 'ok'"
+duck.views: $(SQL_RUN_FILE)
+	@echo "Applying views from generated SQL script..."
+	cd $(DUCKDB_DIR) && poetry run duckdb "$(DUCKDB_BASENAME)" -init ".create_views_run.sql" -c "SELECT 'ok'"
+	@rm -f $(SQL_RUN_FILE)
 
 # Usage: make duck.query SQL="SELECT * FROM lake.labs LIMIT 20"
 duck.query:
 	@test -n "$(SQL)" || (echo 'Usage: make duck.query SQL="SELECT …"'; exit 1)
+	@# Run query from project root, so DB file path is correct
 	poetry run duckdb "$(DUCKDB_FILE)" -c "$(SQL)"
+# --- END NEW DuckDB SECTION ---
 
 # ============================================================================
 # Maintenance & Utilities

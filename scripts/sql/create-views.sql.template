@@ -1,0 +1,36 @@
+-- Create a logical namespace for views
+CREATE SCHEMA IF NOT EXISTS lake;
+PRAGMA timezone='UTC';
+
+-- This file is a template.
+-- The Makefile will replace __PARQUET_ROOT__ with an absolute path.
+
+CREATE OR REPLACE VIEW lake.minute_facts AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/minute_facts/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.daily_summary AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/daily_summary/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.workouts AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/workouts/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.cardio_splits AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/cardio_splits/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.cardio_strokes AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/cardio_strokes/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.resistance_sets AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/resistance_sets/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.labs AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/labs/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.protocol_history AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/protocol_history/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.lactate AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/lactate/**/*.parquet', hive_partitioning=true, union_by_name=true);
+
+CREATE OR REPLACE VIEW lake.oura_summary AS
+SELECT * FROM read_parquet('__PARQUET_ROOT__/oura_summary/**/*.parquet', hive_partitioning=true, union_by_name=true);
