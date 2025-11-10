@@ -7,7 +7,17 @@ All paths are derived from configuration (config.yaml or environment variables).
 
 from pathlib import Path
 
-from pipeline.common.config import get_config
+# Note: pipeline.common.config must be importable
+# This script should not be run directly if it's inside the pipeline module
+try:
+    from pipeline.common.config import get_config
+except ImportError:
+    # This fallback allows scripts in the root (like setup_oura.py) to import
+    # by adding the project root to the path first.
+    import sys
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+    from pipeline.common.config import get_config
+
 
 # Get configuration
 config = get_config()
@@ -40,6 +50,10 @@ ARCHIVE_HAE_QUICK_DIR = ARCHIVE_HAE_DIR / "Quick"
 ARCHIVE_JEFIT_DIR = ARCHIVE_ROOT / "JEFIT"
 ARCHIVE_CONCEPT2_DIR = ARCHIVE_ROOT / "Concept2"
 ARCHIVE_LABS_DIR = ARCHIVE_ROOT / "labs"
+ARCHIVE_OURA_DIR = ARCHIVE_ROOT / "Oura"
+ARCHIVE_OURA_SLEEP_DIR = ARCHIVE_OURA_DIR / "sleep"
+ARCHIVE_OURA_ACTIVITY_DIR = ARCHIVE_OURA_DIR / "activity"
+ARCHIVE_OURA_READINESS_DIR = ARCHIVE_OURA_DIR / "readiness"
 
 # Parquet table paths
 MINUTE_FACTS_PATH = PARQUET_ROOT / "minute_facts"
@@ -51,6 +65,10 @@ LACTATE_PATH = PARQUET_ROOT / "lactate"
 RESISTANCE_SETS_PATH = PARQUET_ROOT / "resistance_sets"
 LABS_PATH = PARQUET_ROOT / "labs"
 PROTOCOL_HISTORY_PATH = PARQUET_ROOT / "protocol_history" 
+OURA_SUMMARY_PATH = PARQUET_ROOT / "oura_summary" 
+
+# Credentials / Tokens
+OURA_TOKENS_FILE_PATH = DATA_ROOT / "oura_tokens.json"
 
 # Create directories on import
 for path in [
@@ -69,6 +87,9 @@ for path in [
     ARCHIVE_JEFIT_DIR,
     ARCHIVE_CONCEPT2_DIR,
     ARCHIVE_LABS_DIR,
+    ARCHIVE_OURA_SLEEP_DIR, 
+    ARCHIVE_OURA_ACTIVITY_DIR, 
+    ARCHIVE_OURA_READINESS_DIR, 
     ERROR_ROOT,
 ]:
     path.mkdir(parents=True, exist_ok=True)
@@ -101,7 +122,13 @@ __all__ = [
     "RAW_OURA_DIR",
     "RAW_OURA_SLEEP_DIR",
     "RAW_OURA_ACTIVITY_DIR",
-    "RAW_OURA_READINESS_DIR",    
+    "RAW_OURA_READINESS_DIR",
+    "ARCHIVE_OURA_DIR",
+    "ARCHIVE_OURA_SLEEP_DIR",
+    "ARCHIVE_OURA_ACTIVITY_DIR",
+    "ARCHIVE_OURA_READINESS_DIR",
+    # Token Paths
+    "OURA_TOKENS_FILE_PATH",
     # Parquet table paths
     "MINUTE_FACTS_PATH",
     "DAILY_SUMMARY_PATH",
@@ -110,8 +137,6 @@ __all__ = [
     "CARDIO_STROKES_PATH",
     "RESISTANCE_SETS_PATH",
     "LABS_PATH",
-    "PROTOCOL_HISTORY_PATH",  
+    "PROTOCOL_HISTORY_PATH",
+    "OURA_SUMMARY_PATH", 
 ]
-
-# Credentials / Tokens
-OURA_TOKENS_FILE = "oura_tokens.json"

@@ -267,7 +267,7 @@ def _process_minute_facts(df: pd.DataFrame, source_value: str, ingest_run_id: st
         MINUTE_FACTS_PATH,
         partition_cols=['date', 'source'],
         schema=MINUTE_FACTS_SCHEMA,
-        mode='overwrite_or_ignore'
+        mode='delete_matching' # <-- THIS IS THE FIX
     )
 
 

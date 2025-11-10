@@ -15,7 +15,7 @@ DUCKDB_FILE  ?= Data/duck/health.duckdb
 START_DATE   ?= $(shell date -d '3 days ago' +%Y-%m-%d) # Default: 3 days ago
 
 # Default ingestion targets for 'make all'
-# UPDATED to include hae-quick and ingest-oura
+# This list is correct. 'ingest-oura' will trigger the fetch.
 INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2-all ingest-oura ingest-jefit ingest-labs ingest-protocols
 
 # ============================================================================
@@ -55,7 +55,7 @@ dev-shell:
 # ============================================================================
 
 .PHONY: ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
-.PHONY: ingest-oura ingest-jefit ingest-jefit-file test-jefit backfill-lactate
+.PHONY: fetch-oura ingest-oura ingest-jefit ingest-jefit-file test-jefit backfill-lactate
 .PHONY: ingest-labs ingest-protocols
 .PHONY: all reload show-ingest check-parquet
 
@@ -91,9 +91,17 @@ backfill-lactate:
 	@echo "Backfilling lactate measurements from Concept2 comments..."
 	poetry run python scripts/backfill_lactate.py
 
-ingest-oura:
+# --- Oura (MODIFIED) ---
+
+ingest-oura: fetch-oura # <-- This target now depends on fetch-oura
+	@echo "--- Ingesting Oura JSON into Parquet oura_summary ---"
+	$(PYTHON) -m $(MODULE_ROOT).oura_json
+
+fetch-oura: # <-- Renamed from ingest-oura
 	@echo "--- Fetching Oura data (from $(START_DATE)) ---"
 	@poetry run python scripts/fetch_oura_history.py --start-date $(START_DATE)
+
+# --- JEFIT (Resistance Training) ---
 
 ingest-jefit:
 	@test -d "Data/Raw/JEFIT" || mkdir -p "Data/Raw/JEFIT"
@@ -264,7 +272,8 @@ help:
 	@echo "  ingest-concept2         - Ingest last 50 Concept2 workouts via API"
 	@echo "  ingest-concept2-recent  - Ingest last 10 workouts (quick test)"
 	@echo "  ingest-concept2-all     - Ingest last 200 workouts (full sync)"
-	@echo "  ingest-oura             - Ingest Oura data (from $$START_DATE)"
+	@echo "  ingest-oura             - Fetch & Ingest Oura data (from $$START_DATE)"
+	@echo "  fetch-oura              - Fetch Oura data without ingesting"
 	@echo "  ingest-jefit            - Ingest latest JEFIT CSV from Data/Raw/JEFIT/"
 	@echo "  ingest-jefit-file       - Ingest specific file: FILE=path/to/export.csv"
 	@echo "  ingest-labs             - Ingest downloaded Labs Excel file -> Parquet"

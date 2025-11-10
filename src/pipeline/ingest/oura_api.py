@@ -4,21 +4,20 @@ import requests
 import json
 from datetime import date, timedelta
 from ..paths import (
-    OURA_TOKENS_FILE,
+    OURA_TOKENS_FILE_PATH,
     RAW_OURA_SLEEP_DIR,
     RAW_OURA_ACTIVITY_DIR,
     RAW_OURA_READINESS_DIR
 )
-from ..common.timestamps import get_last_processed_timestamp, write_last_processed_timestamp
-from dotenv import load_dotenv
+# Use config for secrets, not dotenv
+from ..common.config import get_oura_client_id, get_oura_client_secret
 
-# Load credentials from .env
-load_dotenv()
-CLIENT_ID = os.getenv("OURA_CLIENT_ID")
-CLIENT_SECRET = os.getenv("OURA_CLIENT_SECRET")
+# Get credentials from central config
+CLIENT_ID = get_oura_client_id()
+CLIENT_SECRET = get_oura_client_secret()
 
-TOKEN_URL = "https.api.ouraring.com/oauth/token"
-API_BASE_URL = "https.api.ouraring.com/v2/usercollection"
+TOKEN_URL = "https://api.ouraring.com/oauth/token"
+API_BASE_URL = "https://api.ouraring.com/v2/usercollection"
 
 # Define the data we want to fetch and where to save it
 DATA_ENDPOINTS = {
@@ -32,7 +31,7 @@ class OuraAPIClient:
     Client to handle Oura V2 API authentication, token refreshing,
     and data fetching.
     """
-    def __init__(self, token_file=OURA_TOKENS_FILE):
+    def __init__(self, token_file=OURA_TOKENS_FILE_PATH): # Use standard path
         self.token_file = token_file
         self.tokens = self._load_tokens()
         self._ensure_directories()
@@ -40,14 +39,15 @@ class OuraAPIClient:
     def _ensure_directories(self):
         """Make sure the raw data directories exist."""
         for path in DATA_ENDPOINTS.values():
-            os.makedirs(path, exist_ok=True)
+            # Use the Path object's mkdir method
+            path.mkdir(parents=True, exist_ok=True)
 
     def _load_tokens(self):
         """Load tokens from the JSON file."""
-        if not os.path.exists(self.token_file):
+        if not self.token_file.exists(): # Use Path.exists()
             raise FileNotFoundError(
                 f"Token file not found at {self.token_file}. "
-                "Please run scripts/setup_oura.py first."
+                "Please run `poetry run python scripts/setup_oura.py` first."
             )
         with open(self.token_file, 'r') as f:
             return json.load(f)
@@ -61,6 +61,10 @@ class OuraAPIClient:
         """Use the refresh token to get a new access token."""
         print("Oura access token expired. Refreshing...")
         
+        if not CLIENT_ID or not CLIENT_SECRET:
+            print("❌ Error: OURA_CLIENT_ID or OURA_CLIENT_SECRET not configured.")
+            return None
+
         token_data = {
             "grant_type": "refresh_token",
             "refresh_token": self.tokens["refresh_token"],
@@ -133,7 +137,8 @@ class OuraAPIClient:
                         continue
                         
                     filename = f"oura_{endpoint}_{day}.json"
-                    filepath = os.path.join(save_dir, filename)
+                    # Use Path object to join path and write
+                    filepath = save_dir / filename
                     with open(filepath, 'w') as f:
                         json.dump(item, f, indent=4)
                 
@@ -146,8 +151,8 @@ class OuraAPIClient:
 
 def fetch_oura_data(start_date=None):
     """
-    Main function to fetch Oura data since the last processed date
-    or a specified start_date.
+    Main function to fetch Oura data for a specified start_date.
+    Relies on START_DATE from Makefile.
     """
     try:
         client = OuraAPIClient()
@@ -156,27 +161,20 @@ def fetch_oura_data(start_date=None):
         print("Please run `poetry run python scripts/setup_oura.py` first.")
         return
 
-    # Use the 'oura' namespace for the last processed timestamp
-    last_processed = get_last_processed_timestamp(namespace="oura")
-
     if start_date:
         start = date.fromisoformat(start_date)
         print(f"Using provided start date: {start.isoformat()}")
-    elif last_processed:
-        start = date.fromisoformat(last_processed) + timedelta(days=1)
-        print(f"Resuming from last processed date: {start.isoformat()}")
     else:
-        # Default: 5 years back, matching your Concept2 bootstrap
-        start = date.fromisoformat("2019-01-01") 
-        print(f"No last processed date, bootstrapping from default: {start.isoformat()}")
+        # Default: 3 days back if no start_date is provided (e.g., manual run)
+        start = date.today() - timedelta(days=3)
+        print(f"No start_date provided. Defaulting to 3 days ago: {start.isoformat()}")
 
     end = date.today()
 
     if start > end:
-        print(f"Oura data is already up-to-date. Last processed: {last_processed}")
+        print(f"Start date {start.isoformat()} is after end date {end.isoformat()}. Nothing to fetch.")
         return
 
     client.fetch_data_by_date(start.isoformat(), end.isoformat())
 
-    # Record the new last processed date
-    write_last_processed_timestamp(end.isoformat(), namespace="oura")
+    print(f"--- Oura fetch complete for range {start.isoformat()} to {end.isoformat()} ---")

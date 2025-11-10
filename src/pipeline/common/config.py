@@ -37,7 +37,8 @@ DEFAULT_CONFIG = {
     'api': {
         'concept2': {
             'base_url': 'https://log.concept2.com/api/',
-        }
+        },
+        'oura': {} # Add oura namespace
     },
     'drive_sources': {}
 }
@@ -106,6 +107,13 @@ class Config:
         if c2_token := os.getenv('CONCEPT2_API_TOKEN'):
             self._config['api']['concept2']['token'] = c2_token
         
+        # --- Oura OAuth credentials ---
+        if oura_id := os.getenv('OURA_CLIENT_ID'):
+            self._config['api'].setdefault('oura', {})['client_id'] = oura_id
+        if oura_secret := os.getenv('OURA_CLIENT_SECRET'):
+            self._config['api'].setdefault('oura', {})['client_secret'] = oura_secret
+        # --- End Oura ---
+
         # Data directories
         if data_root := os.getenv('DATA_ROOT'): # From .env.example
             self._config['data']['raw_dir'] = f"{data_root}/Raw"
@@ -209,7 +217,7 @@ class Config:
         # Mask API tokens
         if 'api' in safe_config:
             for service in safe_config['api']:
-                if 'token' in safe_config['api'][service]:
+                if 'token' in safe_config[service]:
                     safe_config['api'][service]['token'] = '***MASKED***'
         
         return f"Config({safe_config})"
@@ -237,3 +245,13 @@ def get_concept2_token() -> Optional[str]:
 def get_concept2_base_url() -> str:
     """Get Concept2 API base URL."""
     return get_config().get_api_base_url('concept2') or 'https://log.concept2.com/api/'
+
+# --- Oura Helpers ---
+def get_oura_client_id() -> Optional[str]:
+    """Get Oura Client ID."""
+    return get_config().get('api.oura.client_id')
+
+def get_oura_client_secret() -> Optional[str]:
+    """Get Oura Client Secret."""
+    return get_config().get('api.oura.client_secret')
+# --- End Oura ---

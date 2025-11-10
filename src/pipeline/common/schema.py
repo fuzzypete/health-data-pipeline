@@ -367,6 +367,48 @@ protocol_history_schema = pa.schema([
 
 
 # ============================================================================
+# Oura Daily Summary
+# ============================================================================
+
+oura_summary_schema = pa.schema([
+    pa.field("day", pa.date32(), nullable=False), # Primary Key
+    
+    # --- Activity Metrics ---
+    pa.field("activity_score", pa.int8(), nullable=True),
+    pa.field("activity_contributors", pa.map_(pa.string(), pa.int8()), nullable=True),
+    pa.field("active_calories_kcal", pa.int32(), nullable=True),
+    pa.field("total_calories_kcal", pa.int32(), nullable=True),
+    pa.field("steps", pa.int32(), nullable=True),
+    pa.field("equivalent_walking_distance_m", pa.int32(), nullable=True),
+    pa.field("high_activity_time_s", pa.int32(), nullable=True),
+    pa.field("medium_activity_time_s", pa.int32(), nullable=True),
+    pa.field("low_activity_time_s", pa.int32(), nullable=True),
+    pa.field("sedentary_time_s", pa.int32(), nullable=True),
+    pa.field("non_wear_time_s", pa.int32(), nullable=True),
+
+    # --- Sleep Metrics ---
+    pa.field("sleep_score", pa.int8(), nullable=True),
+    pa.field("sleep_contributors", pa.map_(pa.string(), pa.int8()), nullable=True),
+    pa.field("total_sleep_duration_s", pa.int32(), nullable=True),
+    pa.field("time_in_bed_s", pa.int32(), nullable=True),
+
+    # --- Readiness Metrics ---
+    pa.field("readiness_score", pa.int8(), nullable=True),
+    pa.field("readiness_contributors", pa.map_(pa.string(), pa.int8()), nullable=True),
+    pa.field("temperature_deviation_c", pa.float64(), nullable=True),
+    pa.field("resting_heart_rate_bpm", pa.int8(), nullable=True),
+    pa.field("hrv_ms", pa.int32(), nullable=True),
+
+    # --- Lineage ---
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Hive partitioning field (string for directory names)
+    pa.field("date", pa.string(), nullable=True),  
+])
+
+# ============================================================================
 # Schema registry (for convenience)
 # ============================================================================
 
@@ -380,6 +422,7 @@ SCHEMAS = {
     'resistance_sets': resistance_sets_schema,
     'lactate': lactate_schema, 
     'protocol_history': protocol_history_schema, 
+    'oura_summary': oura_summary_schema,
 }
 
 def get_schema(table_name: str) -> pa.Schema:

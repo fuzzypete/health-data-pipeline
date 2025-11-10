@@ -2,14 +2,24 @@ import os
 import webbrowser
 import requests
 import json
-from dotenv import load_dotenv
 from urllib.parse import urlencode
+import sys
+from pathlib import Path
+
+# Add project root (parent of 'scripts') to sys.path
+# This allows us to import from 'src.pipeline'
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
+
+# Now we can import from the pipeline
+from src.pipeline.common.config import get_oura_client_id, get_oura_client_secret
+from src.pipeline.paths import OURA_TOKENS_FILE_PATH
+
 
 # --- Configuration ---
-# Make sure these are in your .env file
-load_dotenv()
-CLIENT_ID = os.getenv("OURA_CLIENT_ID")
-CLIENT_SECRET = os.getenv("OURA_CLIENT_SECRET")
+# Get secrets from the central config manager
+CLIENT_ID = get_oura_client_id()
+CLIENT_SECRET = get_oura_client_secret()
 
 # This MUST match the "Redirect URI" you set in the Oura app settings
 REDIRECT_URI = "http://localhost:8080/oura_callback"
@@ -21,8 +31,8 @@ SCOPES = "email personal daily heartrate workout session tag spo2"
 AUTH_URL = "https://cloud.ouraring.com/oauth/authorize"
 TOKEN_URL = "https://api.ouraring.com/oauth/token"
 
-# The file where we'll store the tokens
-TOKEN_FILE = "oura_tokens.json"
+# The file where we'll store the tokens, from paths.py
+TOKEN_FILE = OURA_TOKENS_FILE_PATH
 
 def main():
     if not CLIENT_ID or not CLIENT_SECRET:
@@ -86,8 +96,8 @@ def main():
         
         print(f"\n✅ Success! Tokens saved to {TOKEN_FILE}")
         print("This file contains your secret tokens. DO NOT commit it to Git.")
-        print("Make sure it's listed in your .gitignore file.")
-        print("\nYou are all set. We can now write the real ingestion script.")
+        print("Your .gitignore should already cover the Data/ directory.")
+        print("\nYou are all set.")
 
     except requests.exceptions.RequestException as e:
         print(f"\n❌ Error exchanging code: {e}")
