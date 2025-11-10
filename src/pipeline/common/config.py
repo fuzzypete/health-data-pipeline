@@ -124,12 +124,12 @@ class Config:
             drive_sources['protocols']['parent_folder_id'] = protocols_folder_id
 
         if hae_parent_id := os.getenv('HDP_HAE_PARENT_ID'):
-            if 'hae_csv' in drive_sources:
-                drive_sources['hae_csv']['parent_folder_id'] = hae_parent_id
-            if 'hae_json' in drive_sources:
-                drive_sources['hae_json']['parent_folder_id'] = hae_parent_id
-            if 'hae_quick' in drive_sources:
-                drive_sources['hae_quick']['parent_folder_id'] = hae_parent_id
+            # Support both old and new naming conventions
+            for source_name in ['hae_csv', 'hae_json', 'hae_quick',  # OLD
+                                'hae_daily_metrics', 'hae_daily_workouts',  # NEW
+                                'hae_quick_metrics', 'hae_quick_workouts']:  # NEW
+                if source_name in drive_sources:
+                    drive_sources[source_name]['parent_folder_id'] = hae_parent_id
     
     def get(self, key_path: str, default: Any = None) -> Any:
         """

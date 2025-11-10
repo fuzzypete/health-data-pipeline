@@ -161,9 +161,17 @@ fetch-protocols:
 	@echo "Fetching 'protocols' source from Google Drive..."
 	$(PYTHON) $(FETCH_SCRIPT) protocols
 
+fetch-hae-daily:
+	@echo "Fetching Daily HAE sources (automated exports)..."
+	$(PYTHON) $(FETCH_SCRIPT) hae_daily_metrics hae_daily_workouts
+
+fetch-hae-quick:
+	@echo "Fetching Quick HAE sources (manual exports)..."
+	$(PYTHON) $(FETCH_SCRIPT) hae_quick_metrics hae_quick_workouts
+
 fetch-hae:
-	@echo "Fetching all HAE sources (hae_csv, hae_json, hae_quick) from Google Drive..."
-	$(PYTHON) $(FETCH_SCRIPT) hae_csv hae_json hae_quick
+	@echo "Fetching all HAE sources from Google Drive..."
+	$(PYTHON) $(FETCH_SCRIPT) hae_daily_metrics hae_daily_workouts hae_quick_metrics hae_quick_workouts
 
 # ============================================================================
 # DuckDB (Local query engine)
@@ -258,7 +266,9 @@ help:
 	@echo "  fetch-all               - Fetch all sources from Google Drive defined in config.yaml"
 	@echo "  fetch-labs              - Fetch 'labs' source from Google Drive"
 	@echo "  fetch-protocols         - Fetch 'protocols' source from Google Drive"
-	@echo "  fetch-hae               - Fetch all HAE sources (hae_csv, hae_json, hae_quick) from Drive"
+	@echo "  fetch-hae               - Fetch all HAE sources from Google Drive"
+	@echo "  fetch-hae-daily         - Fetch Daily HAE sources (CSV + JSON)"
+	@echo "  fetch-hae-quick         - Fetch Quick HAE sources (CSV + JSON)"
 	@echo ""
 	@echo "IngAestion - Utilities:"
 	@echo "  all              - Run all default targets: $(INGEST_TARGETS)"
