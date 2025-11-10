@@ -12,10 +12,11 @@ PYTHON       := poetry run python
 MODULE_ROOT  := src.pipeline.ingest
 PARQUET_DIR  := Data/Parquet
 DUCKDB_FILE  ?= Data/duck/health.duckdb
+START_DATE   ?= $(shell date -d '3 days ago' +%Y-%m-%d) # Default: 3 days ago
 
 # Default ingestion targets for 'make all'
-# UPDATED to include hae-quick
-INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2-all ingest-jefit ingest-labs ingest-protocols
+# UPDATED to include hae-quick and ingest-oura
+INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2-all ingest-oura ingest-jefit ingest-labs ingest-protocols
 
 # ============================================================================
 # Development Environment
@@ -54,7 +55,7 @@ dev-shell:
 # ============================================================================
 
 .PHONY: ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2 ingest-concept2-recent ingest-concept2-all test-concept2
-.PHONY: ingest-jefit ingest-jefit-file test-jefit backfill-lactate
+.PHONY: ingest-oura ingest-jefit ingest-jefit-file test-jefit backfill-lactate
 .PHONY: ingest-labs ingest-protocols
 .PHONY: all reload show-ingest check-parquet
 
@@ -90,7 +91,9 @@ backfill-lactate:
 	@echo "Backfilling lactate measurements from Concept2 comments..."
 	poetry run python scripts/backfill_lactate.py
 
-# --- JEFIT (Resistance Training) ---
+ingest-oura:
+	@echo "--- Fetching Oura data (from $(START_DATE)) ---"
+	@poetry run python scripts/fetch_oura_history.py --start-date $(START_DATE)
 
 ingest-jefit:
 	@test -d "Data/Raw/JEFIT" || mkdir -p "Data/Raw/JEFIT"
@@ -261,6 +264,7 @@ help:
 	@echo "  ingest-concept2         - Ingest last 50 Concept2 workouts via API"
 	@echo "  ingest-concept2-recent  - Ingest last 10 workouts (quick test)"
 	@echo "  ingest-concept2-all     - Ingest last 200 workouts (full sync)"
+	@echo "  ingest-oura             - Ingest Oura data (from $$START_DATE)"
 	@echo "  ingest-jefit            - Ingest latest JEFIT CSV from Data/Raw/JEFIT/"
 	@echo "  ingest-jefit-file       - Ingest specific file: FILE=path/to/export.csv"
 	@echo "  ingest-labs             - Ingest downloaded Labs Excel file -> Parquet"
@@ -269,12 +273,12 @@ help:
 	@echo "Ingestion - Google Drive (Fetch):"
 	@echo "  fetch-all               - Fetch all sources from Google Drive defined in config.yaml"
 	@echo "  fetch-labs              - Fetch 'labs' source from Google Drive"
-	@echo "  fetch-protocols         - Fetch 'protocols' source from Google Drive"
+	@echo "  fetch-protocols         - Fetch 'protocols' source from GoogleDrive"
 	@echo "  fetch-hae               - Fetch all HAE sources from Google Drive"
 	@echo "  fetch-hae-daily         - Fetch Daily HAE sources (CSV + JSON)"
 	@echo "  fetch-hae-quick         - Fetch Quick HAE sources (CSV + JSON)"
 	@echo ""
-	@echo "IngAestion - Utilities:"
+	@echo "Ingestion - Utilities:"
 	@echo "  all              - Run all default targets: $(INGEST_TARGETS)"
 	@echo "  show-ingest      - Show which targets will run in 'make all'"
 	@echo "  check-parquet    - Check which Parquet tables exist + row counts"

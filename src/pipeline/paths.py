@@ -99,3 +99,6 @@ __all__ = [
     "LABS_PATH",
     "PROTOCOL_HISTORY_PATH",  
 ]
+
+# Credentials / Tokens
+OURA_TOKENS_FILE = "oura_tokens.json"
