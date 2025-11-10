@@ -7,6 +7,10 @@ Writes to: Data/Parquet/workouts/
 
 Uses Strategy B (Rich Timezone) principle, trusting the per-event
 timestamps (with offsets) provided in the JSON.
+
+v2.1: Reverted to monthly partitioning. Daily partitioning combined
+with upsert_by_key() causes 'Too many open files' error on large
+backfills.
 """
 import logging
 import json
@@ -161,8 +165,7 @@ def ingest_hae_workouts(limit: int = None) -> None:
             df[col] = None
     df = df[WORKOUTS_SCHEMA.names] # Reorder
     
-    # Create partition column
-    df = create_date_partition_column(df, "start_time_utc", "date")
+    df = create_date_partition_column(df, "start_time_utc", "date", "M")
 
     log.info(f"Writing {len(df)} workouts to {WORKOUTS_PATH}")
     

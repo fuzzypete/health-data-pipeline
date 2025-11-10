@@ -65,7 +65,7 @@ def backfill_lactate_from_concept2_workouts():
     # Convert to table and write
     lactate_table = create_lactate_table(lactate_df)
     lactate_table = create_date_partition_column(
-        lactate_table, "workout_start_utc", "date"
+        lactate_table, "workout_start_utc", "date", "M"
     )
 
     upsert_by_key(
@@ -84,9 +84,11 @@ def backfill_lactate_from_concept2_workouts():
     log.info(f"  Mean:  {lactate_df['lactate_mmol'].mean():.2f} mmol/L")
     log.info(f"  Min:   {lactate_df['lactate_mmol'].min():.2f} mmol/L")
     log.info(f"  Max:   {lactate_df['lactate_mmol'].max():.2f} mmol/L")
-    log.info(
-        f"  Date range: {lactate_df['date'].min()} to {lactate_df['date'].max()}"
-    )
+    
+    # Can't check min/max date if it's a table
+    # log.info(
+    #     f"  Date range: {lactate_df['date'].min()} to {lactate_df['date'].max()}"
+    # )
 
 
 if __name__ == "__main__":

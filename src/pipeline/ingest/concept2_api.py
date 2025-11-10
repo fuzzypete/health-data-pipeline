@@ -6,7 +6,12 @@ Fetches workout data from Concept2 API and ingests into:
 - cardio_splits (interval-level data)
 - cardio_strokes (stroke-by-stroke data)
 
-Uses Strategy B (rich timezone) as Concept2 provides per-workout timezone.
+TIMESTAMPING: Uses Strategy B (rich timezone) as Concept2 provides
+per-workout timezone.
+
+PARTITIONING: These tables use upsert_by_key(), which rewrites the entire
+dataset. To avoid 'Too many open files' errors, these tables
+are partitioned MONTHLY ('M'), not daily.
 """
 from __future__ import annotations
 
@@ -415,7 +420,6 @@ def ingest_workouts_by_date(
         workouts_combined = pd.concat(all_workouts, ignore_index=True)
 
         # local date filtering (belt-and-suspenders)
-        # The API *should* respect from/to, but we double-check.
         workouts_combined["date_only"] = (
             workouts_combined["start_time_local"].dt.date
         )
@@ -427,9 +431,8 @@ def ingest_workouts_by_date(
         ]
         workouts_combined = workouts_combined.drop(columns=["date_only"])
 
-        # partitioning
         workouts_combined = create_date_partition_column(
-            workouts_combined, "start_time_utc", "date"
+            workouts_combined, "start_time_utc", "date", "M"
         )
 
         upsert_by_key(
@@ -452,7 +455,7 @@ def ingest_workouts_by_date(
         
         if not lactate_df.empty:
             lactate_df = create_date_partition_column(
-                lactate_df, "workout_start_utc", "date"
+                lactate_df, "workout_start_utc", "date", "M"
             )
             lactate_table = create_lactate_table(lactate_df)
             
@@ -472,7 +475,7 @@ def ingest_workouts_by_date(
     if all_splits:
         splits_combined = pd.concat(all_splits, ignore_index=True)
         splits_combined = create_date_partition_column(
-            splits_combined, "workout_start_utc", "date"
+            splits_combined, "workout_start_utc", "date", "M"
         )
         upsert_by_key(
             splits_combined,
@@ -487,7 +490,7 @@ def ingest_workouts_by_date(
     if all_strokes:
         strokes_combined = pd.concat(all_strokes, ignore_index=True)
         strokes_combined = create_date_partition_column(
-            strokes_combined, "workout_start_utc", "date"
+            strokes_combined, "workout_start_utc", "date", "M"
         )
         upsert_by_key(
             strokes_combined,
@@ -507,7 +510,6 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Ingest workouts from Concept2 API")
-    # --limit is removed, we only use dates now
     parser.add_argument("--from-date", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--to-date", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument(

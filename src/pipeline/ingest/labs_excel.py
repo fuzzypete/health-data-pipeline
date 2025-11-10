@@ -133,10 +133,8 @@ def main():
     ingest_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     try:
-        # --- THIS IS THE FIX ---
         # Resolve the path from the project root (where make is run)
         input_file = Path(args.input).resolve()
-        # --- END FIX ---
         
         df_wide = read_excel_wide(input_file, sheet_name=args.sheet)
         df_long = melt_to_long(df_wide, input_file.name, ingest_run_id)
@@ -151,7 +149,7 @@ def main():
         
         write_partitioned_dataset(
             table, 
-            root_path=LABS_PATH, 
+            table_path=LABS_PATH, 
             partition_cols=["year"],
             schema=get_schema("labs"),
             mode="delete_matching" # Overwrite partitions

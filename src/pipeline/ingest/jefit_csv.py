@@ -5,20 +5,12 @@ Parses JEFIT export CSV and ingests into:
 - workouts (session summary)
 - resistance_sets (set-level data)
 
-JEFIT CSV structure:
-- SETTING: User settings
-- PROFILE: Body measurements
-- ROUTINES: Workout templates
-- WORKOUT SESSIONS: Individual workout sessions
-- EXERCISE LOGS: Exercises done per session
-- EXERCISE SET LOGS: Individual sets (the detailed data)
-- EXERCISE RECORDS: PRs/bests
-- CARDIO LOGS: Cardio sessions
-- CUSTOM EXERCISES: User-defined exercises
+TIMESTAMPING: JEFIT exports provide naive timestamps. Per documentation,
+this source uses Strategy A (assumed home timezone).
 
-We primarily care about:
-- WORKOUT SESSIONS → workouts table
-- EXERCISE LOGS + EXERCISE SET LOGS → resistance_sets table
+PARTITIONING: This table uses upsert_by_key(), which rewrites the entire
+dataset. To avoid 'Too many open files' errors, this table
+is partitioned MONTHLY ('M'), not daily.
 """
 from __future__ import annotations
 
@@ -30,7 +22,7 @@ from typing import Optional
 
 import pandas as pd
 
-from pipeline.common import apply_strategy_b, get_schema
+from pipeline.common import apply_strategy_a, get_schema, get_home_timezone
 from pipeline.common.parquet_io import (
     add_lineage_fields,
     create_date_partition_column,
@@ -115,6 +107,7 @@ def process_workout_sessions(
         return pd.DataFrame()
     
     workouts = []
+    home_tz = get_home_timezone() # For Strategy A
     
     for _, session in sessions_df.iterrows():
         session_id = session['_id']
@@ -133,21 +126,24 @@ def process_workout_sessions(
             set_logs_df['exercise_log_id'].isin(exercise_log_ids)
         ]
         
-        # Use session start time with assumed Pacific timezone
-        # JEFIT timestamps are Unix epoch seconds
-        start_timestamp = pd.Timestamp(session['starttime'], unit='s', tz='UTC')
-        end_timestamp = pd.Timestamp(session['endtime'], unit='s', tz='UTC')
+        # JEFIT timestamps are Unix epoch seconds. Convert to naive datetime.
+        start_naive = pd.to_datetime(session['starttime'], unit='s')
         
-        # Apply Strategy B - use user's home timezone (Pacific)
-        # Note: JEFIT export loses per-workout timezone, so we assume home
-        tz_name = "America/Los_Angeles"  # User's location from profile
-        start_utc, start_local, tz = apply_strategy_b(
-            start_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            tz_name
-        )
+        # --- Use Strategy A (Assumed Timezone) ---
+        temp_df = pd.DataFrame([{"timestamp_local": start_naive}])
+        temp_df = apply_strategy_a(temp_df, home_timezone=home_tz)
+        
+        if temp_df.empty:
+            log.warning(f"Skipping JEFIT session {session_id}, invalid start time")
+            continue
+            
+        start_utc = temp_df.iloc[0]['timestamp_utc']
+        start_local = temp_df.iloc[0]['timestamp_local'] # naive
+        tz_name = temp_df.iloc[0]['tz_name']
+        tz_source = temp_df.iloc[0]['tz_source']
         
         duration_s = session.get('total_time', 0)
-        if pd.notna(duration_s):
+        if pd.notna(duration_s) and duration_s > 0:
             end_utc = start_utc + pd.Timedelta(seconds=duration_s)
             end_local = start_local + pd.Timedelta(seconds=duration_s)
         else:
@@ -170,8 +166,8 @@ def process_workout_sessions(
             'end_time_utc': end_utc,
             'start_time_local': start_local,
             'end_time_local': end_local,
-            'timezone': tz,
-            'tz_source': 'assumed',  # JEFIT export loses timezone
+            'timezone': tz_name,
+            'tz_source': tz_source,
             'duration_s': duration_s,
             
             # Resistance training specific
@@ -212,9 +208,17 @@ def process_resistance_sets(
         suffixes=('', '_exercise')
     )
     
-    # Join with session to get workout_id mapping
+    # Join with session to get workout_start_utc
+    session_starts = sessions_df[['_id', 'starttime']].copy()
+    
+    # Apply Strategy A to get the correct UTC start time
+    home_tz = get_home_timezone()
+    session_starts['timestamp_local'] = pd.to_datetime(session_starts['starttime'], unit='s')
+    session_starts = apply_strategy_a(session_starts, home_timezone=home_tz)
+    session_starts = session_starts.rename(columns={'timestamp_utc': 'workout_start_utc'})
+    
     sets_with_session = sets_with_exercise.merge(
-        sessions_df[['_id', 'starttime']],
+        session_starts[['_id', 'workout_start_utc']],
         left_on='belongsession',
         right_on='_id',
         how='left',
@@ -224,20 +228,15 @@ def process_resistance_sets(
     resistance_sets = []
     
     for _, row in sets_with_session.iterrows():
+        if pd.isna(row.get('workout_start_utc')):
+            continue # Skip sets from sessions that failed timestamp conversion
+
         session_id = row['belongsession']
         workout_id = f"jefit_{session_id}"
         
-        # Get workout start time for partitioning
-        start_timestamp = pd.Timestamp(row['starttime'], unit='s', tz='UTC')
-        tz_name = "America/Los_Angeles"
-        start_utc, _, _ = apply_strategy_b(
-            start_timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            tz_name
-        )
-        
         set_record = {
             'workout_id': workout_id,
-            'workout_start_utc': start_utc,
+            'workout_start_utc': row['workout_start_utc'],
             'exercise_id': str(row['eid']),
             'exercise_name': row['ename'],
             'set_number': int(row['set_index']) + 1,  # Convert 0-indexed to 1-indexed

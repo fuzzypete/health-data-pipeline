@@ -19,8 +19,8 @@ END_DATE     ?= $(shell date +%Y-%m-%d)
 REBUILD_START_DATE ?= $(shell date -d '5 years ago' +%Y-%m-%d)
 
 # Default ingestion targets for 'make all'
-# UPDATED to use new 'ingest-concept2' default target
-INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2 ingest-oura ingest-jefit ingest-labs ingest-protocols
+# UPDATED to use 'fetch-daily' (fast) instead of 'fetch-all' (slow)
+INGEST_TARGETS ?= fetch-daily ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2 ingest-oura ingest-jefit ingest-labs ingest-protocols
 
 # ============================================================================
 # Development Environment
@@ -30,7 +30,18 @@ INGEST_TARGETS ?= fetch-all ingest-hae ingest-hae-quick ingest-hae-workouts inge
 
 install:
 	poetry install --with dev
-# ... (lint, fmt, test, etc. are unchanged) ...
+
+lock:
+	poetry lock --no-update
+
+lint:
+	poetry run ruff check .
+	poetry run black --check .
+
+fmt:
+	poetry run ruff check . --fix
+	poetry run black .
+
 test:
 	poetry run pytest -q
 
@@ -48,13 +59,21 @@ dev-shell:
 # ============================================================================
 
 .PHONY: ingest-hae ingest-hae-quick ingest-hae-workouts 
-.PHONY: ingest-concept2 ingest-concept2-history # <-- MODIFIED
+.PHONY: ingest-concept2 ingest-concept2-history
 .PHONY: fetch-oura ingest-oura ingest-jefit ingest-jefit-file test-jefit backfill-lactate
 .PHONY: ingest-labs ingest-protocols
 .PHONY: all reload show-ingest check-parquet
 
 # --- HAE (Apple Health Export) ---
-# ... (hae targets are unchanged) ...
+
+ingest-hae:
+	@echo "--- Ingesting HAE Automation CSV (HealthMetrics-...) ---"
+	$(PYTHON) -m $(MODULE_ROOT).hae_csv
+
+ingest-hae-quick:
+	@echo "--- Ingesting HAE Quick Export CSV (HealthAutoExport-...) ---"
+	$(PYTHON) -m $(MODULE_ROOT).hae_quick_csv
+
 ingest-hae-workouts:
 	@echo "--- Ingesting HAE Workout JSON (Strategy B) ---"
 	$(PYTHON) -m $(MODULE_ROOT).hae_workouts
@@ -71,21 +90,33 @@ ingest-concept2-history:
 	@echo "--- Ingesting Concept2 HISTORY from $(REBUILD_START_DATE) to $(END_DATE) ---"
 	$(PYTHON) -m $(MODULE_ROOT).concept2_api --from-date $(REBUILD_START_DATE) --to-date $(END_DATE) --no-strokes
 
-# NOTE: The broken test-concept2 target has been removed.
-# You can add it back if you add a --test flag to the python script.
-
 backfill-lactate:
 	@echo "Backfilling lactate measurements from Concept2 comments..."
 	poetry run python scripts/backfill_lactate.py
 
 # --- Oura ---
-# ... (oura targets are unchanged) ...
+
+ingest-oura: fetch-oura
+	@echo "--- Ingesting Oura JSON into Parquet oura_summary ---"
+	$(PYTHON) -m $(MODULE_ROOT).oura_json
+
 fetch-oura:
 	@echo "--- Fetching Oura data (from $(START_DATE)) ---"
 	@poetry run python scripts/fetch_oura_history.py --start-date $(START_DATE)
 
 # --- JEFIT (Resistance Training) ---
-# ... (jefit targets are unchanged) ...
+
+ingest-jefit:
+	@test -d "Data/Raw/JEFIT" || mkdir -p "Data/Raw/JEFIT"
+	@latest=$$(ls -t Data/Raw/JEFIT/*.csv 2>/dev/null | head -1); \
+	if [ -z "$$latest" ]; then \
+		echo "❌ No JEFIT CSV found in Data/Raw/JEFIT/"; \
+		echo "   Export from JEFIT app and place here."; \
+		exit 1; \
+	fi; \
+	echo "Using latest: $$latest"; \
+	$(PYTHON) -m $(MODULE_ROOT).jefit_csv "$$latest"
+
 ingest-jefit-file:
 	@test -n "$(FILE)" || (echo "Usage: make ingest-jefit-file FILE=path/to/export.csv" && exit 1)
 	$(PYTHON) -m $(MODULE_ROOT).jefit_csv "$(FILE)"
@@ -94,13 +125,33 @@ test-jefit:
 	$(PYTHON) scratch/test_jefit_ingestion.py
 
 # --- Labs & Protocols (from downloaded Excel) ---
-# ... (labs/protocols targets are unchanged) ...
+
+ingest-labs:
+	@echo "Ingesting Labs from downloaded Excel file..."
+	$(PYTHON) -m $(MODULE_ROOT).labs_excel
+
+ingest-protocols:
+	@echo "Ingesting Protocols from downloaded Excel file..."
+	$(PYTHON) -m $(MODULE_ROOT).protocol_excel
 
 # --- Aggregates & Utilities ---
-# ... (all, reload, etc. are unchanged, but will use the new ingest-concept2) ...
+
 .PHONY: rebuild-history
-rebuild-history: clean-db clean-parquet fetch build-db create-views
+rebuild-history: # This is a placeholder, as your old one was broken
+	@echo "--- Running FULL historical rebuild ---"
+	@echo "Step 1: Fetching ALL Google Drive history (daily, quick, labs, etc)..."
+	$(MAKE) fetch-all
+	@echo "Step 2: Fetching ALL Concept2 history..."
+	$(MAKE) ingest-concept2-history
+	@echo "Step 3: Running all processing scripts..."
+	@set -e; \
+	for t in $(DAILY_INGEST_TARGETS); do \
+		echo ""; \
+		echo "=== Running $$t ==="; \
+		$(MAKE) $$t; \
+	done
 	@echo "--- 🚀 Historical rebuild complete! ---"	
+
 
 show-ingest:
 	@echo "INGEST_TARGETS => $(INGEST_TARGETS)"
@@ -124,13 +175,21 @@ check-parquet:
 # ============================================================================
 # Google Drive Fetching (NEW UNIFIED SECTION)
 # ============================================================================
-# ... (this whole section is unchanged) ...
-.PHONY: fetch-all fetch-labs fetch-protocols fetch-hae
+
+.PHONY: fetch-daily fetch-all fetch-labs fetch-protocols fetch-hae
 
 FETCH_SCRIPT := scripts/fetch_drive_sources.py
 
+# --- NEW ---
+# Default for 'make all'. Fetches only daily automated exports.
+fetch-daily:
+	@echo "Fetching Daily HAE sources (automated exports)..."
+	$(PYTHON) $(FETCH_SCRIPT) hae_daily_metrics hae_daily_workouts
+
+# --- MODIFIED ---
+# Manual target for full historical pulls.
 fetch-all:
-	@echo "Fetching all Google Drive sources defined in config.yaml..."
+	@echo "Fetching ALL Google Drive sources defined in config.yaml..."
 	$(PYTHON) $(FETCH_SCRIPT)
 
 fetch-labs:
@@ -159,7 +218,7 @@ fetch-hae:
 
 .PHONY: duck.init duck.views duck.query
 
-# --- THIS IS THE NEW, ROBUST DuckDB SECTION ---
+# --- THIS IS THE ROBUST DuckDB SECTION ---
 PROJECT_ROOT     := $(shell pwd)
 PARQUET_ABS_PATH := $(PROJECT_ROOT)/$(PARQUET_DIR)
 
@@ -197,7 +256,7 @@ duck.query:
 # ============================================================================
 # Maintenance & Utilities
 # ============================================================================
-# ... (drop-parquet, zipsrc are unchanged) ...
+
 .PHONY: drop-parquet zipsrc
 
 drop-parquet:
@@ -260,7 +319,8 @@ help:
 	@echo "  ingest-protocols        - Ingest downloaded Protocols Excel file -> Parquet"
 	@echo ""
 	@echo "Ingestion - Google Drive (Fetch):"
-	@echo "  fetch-all               - Fetch all sources from Google Drive defined in config.yaml"
+	@echo "  fetch-daily             - (DEFAULT FOR 'all') Fetch daily HAE sources from Google Drive"
+	@echo "  fetch-all               - (MANUAL) Fetch ALL sources from Google Drive defined in config.yaml"
 	@echo "  fetch-labs              - Fetch 'labs' source from Google Drive"
 	@echo "  fetch-protocols         - Fetch 'protocols' source from GoogleDrive"
 	@echo "  fetch-hae               - Fetch all HAE sources from Google Drive"
@@ -273,6 +333,7 @@ help:
 	@echo "  check-parquet    - Check which Parquet tables exist + row counts"
 	@echo "  backfill-lactate - Extract lactate from Concept2 comments"
 	@echo "  reload           - Drop all Parquet data + re-ingest (CONFIRM=1)"
+	@echo "  rebuild-history  - Fetch ALL history and re-process all data"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test-jefit       - Test JEFIT CSV parsing"
@@ -291,6 +352,6 @@ help:
 	@echo "Quick Start:"
 	@echo "  1. make install"
 	@echo "  2. Configure config.yaml and .env with your settings and IDs"
-	@echo "  3. make all          # Fetch all data from Drive AND run all ingestions"
+	@echo "  3. make all          # Fetch daily data from Drive AND run all ingestions"
 	@echo "  4. make check-parquet # Verify data loaded"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
