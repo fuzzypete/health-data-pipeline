@@ -140,18 +140,14 @@ class Concept2Client:
         )
         return self._request("GET", "/users/me/results", params=params)
 
-    def get_recent_workouts(
+    def get_workouts_by_date(
         self,
-        limit: int | None = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        from_date: str,
+        to_date: str,
         per_page: int = 250,
     ) -> list[dict]:
         """
-        Fetch recent workouts with automatic pagination.
-
-        If from/to is provided, we trust the API to filter but we STILL may
-        need a local filter later.
+        Fetch all workouts within a date range with automatic pagination.
         """
         all_workouts: list[dict] = []
         page = 1
@@ -170,12 +166,6 @@ class Concept2Client:
             log.info(
                 f"Page {current_page}/{total_pages}: fetched {len(data)} workouts (total so far: {len(all_workouts)}/{total})"
             )
-
-            # honor limit ONLY when not doing date-bounded calls
-            if limit and (from_date is None and to_date is None):
-                if len(all_workouts) >= limit:
-                    all_workouts = all_workouts[:limit]
-                    break
 
             if current_page >= total_pages:
                 break
@@ -369,41 +359,33 @@ def ingest_workout(
     return workouts_df, splits_df, strokes_df
 
 
-def ingest_recent_workouts(
-    limit: int = 50,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
+def ingest_workouts_by_date(
+    from_date: str,
+    to_date: str,
     fetch_strokes: bool = True,
 ) -> dict[str, int]:
     client = Concept2Client()
     ingest_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    log.info(f"Starting Concept2 ingestion (run_id={ingest_run_id})")
+    log.info(f"Starting Concept2 ingestion (run_id={ingest_run_id}) for {from_date} to {to_date}")
 
     # ---- Fetch workouts (maybe multi-window) ----
     workouts_json: list[dict] = []
-
-    if from_date and to_date:
-        # multi-window
-        seen_ids: set[str] = set()
-        for chunk_from, chunk_to in iter_date_chunks(from_date, to_date, max_days=180):
-            log.info(f"Fetching chunk {chunk_from} → {chunk_to}")
-            chunk_workouts = client.get_recent_workouts(
-                limit=None,
-                from_date=chunk_from,
-                to_date=chunk_to,
-                per_page=250,
-            )
-            for w in chunk_workouts:
-                wid = str(w["id"])
-                if wid not in seen_ids:
-                    seen_ids.add(wid)
-                    workouts_json.append(w)
-    else:
-        # non-date-bounded: honor limit
-        workouts_json = client.get_recent_workouts(
-            limit=limit, from_date=None, to_date=None, per_page=250
+    seen_ids: set[str] = set()
+    
+    # Iterate over 180-day chunks for robust long-range pulls
+    for chunk_from, chunk_to in iter_date_chunks(from_date, to_date, max_days=180):
+        log.info(f"Fetching chunk {chunk_from} → {chunk_to}")
+        chunk_workouts = client.get_workouts_by_date(
+            from_date=chunk_from,
+            to_date=chunk_to,
+            per_page=250,
         )
+        for w in chunk_workouts:
+            wid = str(w["id"])
+            if wid not in seen_ids:
+                seen_ids.add(wid)
+                workouts_json.append(w)
 
     if not workouts_json:
         log.info("No workouts to ingest")
@@ -433,21 +415,17 @@ def ingest_recent_workouts(
         workouts_combined = pd.concat(all_workouts, ignore_index=True)
 
         # local date filtering (belt-and-suspenders)
-        if from_date or to_date:
-            workouts_combined["date_only"] = (
-                workouts_combined["start_time_local"].dt.date
-            )
-            if from_date:
-                f = pd.to_datetime(from_date).date()
-                workouts_combined = workouts_combined[
-                    workouts_combined["date_only"] >= f
-                ]
-            if to_date:
-                t = pd.to_datetime(to_date).date()
-                workouts_combined = workouts_combined[
-                    workouts_combined["date_only"] <= t
-                ]
-            workouts_combined = workouts_combined.drop(columns=["date_only"])
+        # The API *should* respect from/to, but we double-check.
+        workouts_combined["date_only"] = (
+            workouts_combined["start_time_local"].dt.date
+        )
+        f = pd.to_datetime(from_date).date()
+        t = pd.to_datetime(to_date).date()
+        workouts_combined = workouts_combined[
+            (workouts_combined["date_only"] >= f) &
+            (workouts_combined["date_only"] <= t)
+        ]
+        workouts_combined = workouts_combined.drop(columns=["date_only"])
 
         # partitioning
         workouts_combined = create_date_partition_column(
@@ -529,9 +507,9 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Ingest workouts from Concept2 API")
-    parser.add_argument("--limit", type=int, default=50, help="Number of workouts")
-    parser.add_argument("--from-date", help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--to-date", help="End date (YYYY-MM-DD)")
+    # --limit is removed, we only use dates now
+    parser.add_argument("--from-date", required=True, help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--to-date", required=True, help="End date (YYYY-MM-DD)")
     parser.add_argument(
         "--no-strokes", action="store_true", help="Skip stroke data (faster)"
     )
@@ -547,15 +525,8 @@ def main():
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
 
-    # date-bounded → ignore user limit, we’ll chunk
-    if args.from_date and args.to_date:
-        effective_limit = None
-    else:
-        effective_limit = args.limit
-
     try:
-        counts = ingest_recent_workouts(
-            limit=effective_limit,
+        counts = ingest_workouts_by_date(
             from_date=args.from_date,
             to_date=args.to_date,
             fetch_strokes=not args.no_strokes,
