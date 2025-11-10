@@ -5,9 +5,9 @@ import json
 from datetime import date, timedelta
 from ..paths import (
     OURA_TOKENS_FILE,
-    OURA_SLEEP_DIR,
-    OURA_ACTIVITY_DIR,
-    OURA_READINESS_DIR
+    RAW_OURA_SLEEP_DIR,
+    RAW_OURA_ACTIVITY_DIR,
+    RAW_OURA_READINESS_DIR
 )
 from ..common.timestamps import get_last_processed_timestamp, write_last_processed_timestamp
 from dotenv import load_dotenv
@@ -22,9 +22,9 @@ API_BASE_URL = "https.api.ouraring.com/v2/usercollection"
 
 # Define the data we want to fetch and where to save it
 DATA_ENDPOINTS = {
-    "daily_sleep": OURA_SLEEP_DIR,
-    "daily_activity": OURA_ACTIVITY_DIR,
-    "daily_readiness": OURA_READINESS_DIR,
+    "daily_sleep": RAW_OURA_SLEEP_DIR,
+    "daily_activity": RAW_OURA_ACTIVITY_DIR,
+    "daily_readiness": RAW_OURA_READINESS_DIR,
 }
 
 class OuraAPIClient:
