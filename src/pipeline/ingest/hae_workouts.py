@@ -11,9 +11,13 @@ timestamps (with offsets) provided in the JSON.
 v2.1: Reverted to monthly partitioning. Daily partitioning combined
 with upsert_by_key() causes 'Too many open files' error on large
 backfills.
+
+v2.2: Added drop_duplicates() before upsert to handle overlapping
+raw JSON files (e.g., a daily file and a historical file).
 """
 import logging
 import json
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Dict, Any
@@ -21,7 +25,7 @@ from typing import List, Dict, Any
 import pandas as pd
 
 # Import from your common utilities
-from pipeline.paths import RAW_HAE_JSON_DIR, WORKOUTS_PATH
+from pipeline.paths import RAW_HAE_JSON_DIR, ARCHIVE_HAE_JSON_DIR, WORKOUTS_PATH
 from pipeline.common.schema import get_schema
 from pipeline.common.parquet_io import (
     add_lineage_fields,
@@ -34,6 +38,16 @@ DEFAULT_SOURCE = "HAE_JSON"
 
 # Cache the schema
 WORKOUTS_SCHEMA = get_schema("workouts")
+
+def _archive_file(file_path: Path):
+    """Moves a processed file to the archive directory."""
+    try:
+        ARCHIVE_HAE_JSON_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(file_path), str(ARCHIVE_HAE_JSON_DIR / file_path.name))
+        log.info(f"Archived file: {file_path.name}")
+    except Exception as e:
+        log.warning(f"Failed to archive file {file_path.name}: {e}")
+
 
 def parse_hae_timestamp(ts_str: str) -> tuple[pd.Timestamp, pd.Timestamp, str]:
     """
@@ -61,9 +75,6 @@ def get_qty(data: dict, units: str = None) -> float | None:
     """Helper to safely extract 'qty' from HAE metric dicts."""
     if not data or not isinstance(data, dict):
         return None
-    # TODO: Add unit conversion logic if needed
-    # e.g., if data['units'] == 'mi' and units == 'm':
-    #    return data.get('qty') * 1609.34
     return data.get('qty')
 
 
@@ -80,13 +91,10 @@ def process_workout_json(workout_json: Dict[str, Any], ingest_run_id: str) -> Di
             return None
 
         duration_float = workout_json.get('duration')
-        # Map fields to workouts_schema
         record = {
             "workout_id": workout_json.get('id'),
             "source": DEFAULT_SOURCE,
             "workout_type": workout_json.get('name'),
-            
-            # Timestamps
             "start_time_utc": start_utc,
             "end_time_utc": end_utc,
             "start_time_local": start_local,
@@ -94,18 +102,10 @@ def process_workout_json(workout_json: Dict[str, Any], ingest_run_id: str) -> Di
             "timezone": tz,
             "tz_source": "actual", # Per Strategy B
             "duration_s": int(round(duration_float)) if duration_float is not None else None,
-            
-            # Cardio fields
-            "distance_m": None, # TODO: Implement unit conversion
+            "distance_m": None,
             "calories_kcal": get_qty(workout_json.get('activeEnergyBurned')),
-            
-            # TODO: Map other fields from schema
-            # "avg_hr_bpm": ...
-            # "max_hr_bpm": ...
-            # "notes": ...
         }
         
-        # Add lineage
         record['ingest_time_utc'] = datetime.now(timezone.utc)
         record['ingest_run_id'] = ingest_run_id
         
@@ -128,9 +128,11 @@ def ingest_hae_workouts(limit: int = None) -> None:
         return
 
     all_workouts: List[Dict[str, Any]] = []
+    total_processed_files = 0
     
     for f_path in files:
         log.info(f"Processing file: {f_path.name}")
+        file_workouts: List[Dict[str, Any]] = []
         try:
             with open(f_path, 'r') as f:
                 data = json.load(f)
@@ -140,24 +142,37 @@ def ingest_hae_workouts(limit: int = None) -> None:
             for workout_json in workouts_list:
                 record = process_workout_json(workout_json, ingest_run_id)
                 if record:
-                    all_workouts.append(record)
+                    file_workouts.append(record)
                     
-            if limit and len(all_workouts) >= limit:
+            if limit and len(all_workouts) + len(file_workouts) >= limit:
+                remaining_needed = limit - len(all_workouts)
+                all_workouts.extend(file_workouts[:remaining_needed])
                 log.info(f"Reached processing limit ({limit})")
-                all_workouts = all_workouts[:limit]
                 break
+            
+            all_workouts.extend(file_workouts)
+            
+            # --- We archive *after* processing, not before ---
+            # _archive_file(f_path) 
+            total_processed_files += 1
                 
         except Exception as e:
             log.error(f"Failed to read or parse {f_path.name}: {e}", exc_info=True)
-            # TODO: Move file to Error/ dir
     
     if not all_workouts:
-        log.info("No valid workouts found to ingest.")
+        log.info(f"No valid workouts found to ingest from {total_processed_files} files.")
         return
-
-    # --- Convert to DataFrame and Write ---
+    
+    log.info(f"Read {len(all_workouts)} workouts from {total_processed_files} files.")
     
     df = pd.DataFrame(all_workouts)
+
+    # --- THIS IS THE FIX for Duplicates ---
+    # Deduplicate the in-memory list BEFORE writing
+    log.info(f"Found {len(df)} total workouts in JSON files, deduplicating...")
+    df = df.drop_duplicates(subset=["workout_id", "source"], keep="last")
+    log.info(f"Deduplicated to {len(df)} unique workouts.")
+    # --- END FIX ---
     
     # Ensure schema
     for col in WORKOUTS_SCHEMA.names:
@@ -165,6 +180,7 @@ def ingest_hae_workouts(limit: int = None) -> None:
             df[col] = None
     df = df[WORKOUTS_SCHEMA.names] # Reorder
     
+    # Create partition column - REVERTED TO MONTHLY ('M')
     df = create_date_partition_column(df, "start_time_utc", "date", "M")
 
     log.info(f"Writing {len(df)} workouts to {WORKOUTS_PATH}")
@@ -178,13 +194,21 @@ def ingest_hae_workouts(limit: int = None) -> None:
         schema=WORKOUTS_SCHEMA,
     )
     
+    # --- NOW we can archive the files ---
+    # (Only archive if the upsert was successful)
+    if not args.debug: # Add a debug flag check if you want
+        log.info(f"Archiving {len(files)} processed JSON files...")
+        for f_path in files:
+             _archive_file(f_path)
+    
     log.info("HAE Workout JSON ingestion complete.")
 
 def main():
+    global args # Make args global so ingest_hae_workouts can see it
     import argparse
     parser = argparse.ArgumentParser(description="Ingest HAE Workout JSON")
     parser.add_argument("--limit", type=int, default=None, help="Max number of workouts to process")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging (disables archiving)")
     args = parser.parse_args()
 
     if args.debug:

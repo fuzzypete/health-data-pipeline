@@ -6,8 +6,7 @@ DRY functions for writing partitioned datasets with consistent patterns.
 from __future__ import annotations
 
 import logging
-import operator  # For filter expression
-import shutil  # For upsert_by_key
+import operator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Any
@@ -21,7 +20,6 @@ import pyarrow.compute as pc
 log = logging.getLogger(__name__)
 
 # --- OPERATOR MAP ---
-# Maps string operators to Python's operator functions
 OPERATOR_MAP = {
     '=': operator.eq,
     '==': operator.eq,
@@ -36,17 +34,6 @@ def _build_dnf_expression(dnf_filter_list: List[Any]) -> Optional[pc.Expression]
     """
     Converts a DNF (Disjunctive Normal Form) list of tuples into a
     PyArrow compute expression.
-
-    A DNF list is a list of conjunctive clauses (tuples), which are
-    all OR-ed together.
-    
-    Example:
-        [('and', ('col1', '=', 'a'), ('col2', '=', 'b')),
-         ('and', ('col1', '=', 'c'), ('col2', '=', 'd'))]
-    
-    Becomes:
-        ((pc.field('col1') == 'a') & (pc.field('col2') == 'b')) |
-        ((pc.field('col1') == 'c') & (pc.field('col2') == 'd'))
     """
     if not dnf_filter_list:
         return None
@@ -55,14 +42,12 @@ def _build_dnf_expression(dnf_filter_list: List[Any]) -> Optional[pc.Expression]
         # Handles: ('col1', '=', 'a')
         if len(clause) == 3 and isinstance(clause[0], str) and clause[1] in OPERATOR_MAP:
             field, op_str, val = clause
-            # Use the operator map to get the actual function (e.g., operator.eq)
             op_func = OPERATOR_MAP[op_str]
             return op_func(pc.field(field), val)
         
         # Handles: ('and', ('col1', '=', 'a'), ('col2', '!=', 'b'))
         if clause[0] == 'and':
             sub_clauses = [build_conjunctive_clause(c) for c in clause[1:]]
-            # Chain all sub-clauses with & (and)
             expr = sub_clauses[0]
             for next_expr in sub_clauses[1:]:
                 expr = expr & next_expr
@@ -233,8 +218,7 @@ def upsert_by_key(
     Upsert (update or insert) rows by primary key.
     
     This function is designed to be idempotent and safe for re-running.
-    It performs a full read-modify-write of the entire table,
-    which is why monthly partitioning is required for tables using it.
+    It performs a read-modify-write *only on the affected partitions*.
     
     Args:
         new_df: New data to upsert
@@ -248,44 +232,73 @@ def upsert_by_key(
         return
     
     # Ensure all primary key columns are in the dataframe
-    for col in primary_key:
+    pk_cols = list(set(primary_key + partition_cols))
+    for col in pk_cols:
         if col not in new_df.columns:
-            raise ValueError(f"Primary key column '{col}' not found in new DataFrame")
+            raise ValueError(f"Required key column '{col}' not found in new DataFrame")
+    
+    # If table doesn't exist, just write
+    if not table_path.exists():
+        log.info(f"Table doesn't exist, performing initial write to {table_path}")
+        write_partitioned_dataset(new_df, table_path, partition_cols, schema, mode="overwrite_or_ignore")
+        return
     
     try:
-        # 1. Read ALL existing data from the table
-        log.debug(f"Upsert: Reading full table from {table_path}...")
-        existing_df = read_partitioned_dataset(table_path)
+        # Get partition values from new data
+        partition_values = new_df[partition_cols].drop_duplicates()
         
-        if not existing_df.empty:
-            # 2. Find keys of new data
+        # Build filter for affected partitions (DNF list of lists)
+        filters = []
+        for _, row in partition_values.iterrows():
+            partition_filter = []
+            for col in partition_cols:
+                partition_filter.append((col, '=', row[col]))
+            
+            if len(partition_filter) == 1:
+                filters.append(partition_filter[0])
+            else:
+                filters.append(('and', *partition_filter))
+        
+        # Read existing data *only* for affected partitions
+        existing_affected_df = read_partitioned_dataset(
+            table_path,
+            filters=filters,
+            columns=None # Read all columns
+        )
+        
+        if not existing_affected_df.empty:
+            # Normalize partition column types to match new_df
+            for col in partition_cols:
+                if col in existing_affected_df.columns and col in new_df.columns:
+                    target_dtype = new_df[col].dtype
+                    if existing_affected_df[col].dtype != target_dtype:
+                        try:
+                            existing_affected_df[col] = existing_affected_df[col].astype(target_dtype)
+                        except Exception as e:
+                            log.warning(f"Could not cast column {col} to {target_dtype}: {e}")
+
+            # Remove rows with matching primary keys
             pk_tuple = lambda df: df[primary_key].apply(tuple, axis=1)
             new_keys = set(pk_tuple(new_df))
             
-            # 3. Filter out rows from existing data that are being replaced
-            to_keep = existing_df[~pk_tuple(existing_df).isin(new_keys)]
+            # Keep existing rows that don't match any new keys
+            to_keep = existing_affected_df[~pk_tuple(existing_affected_df).isin(new_keys)]
             
-            # 4. Combine old (kept) data with new data
+            # Combine: kept old + new
             combined_df = pd.concat([to_keep, new_df], ignore_index=True)
             
-            log.info(f"Upsert: {len(new_df)} new rows, {len(to_keep)} kept, {len(existing_df) - len(to_keep)} replaced. Total: {len(combined_df)}")
+            log.info(f"Upsert: {len(new_df)} new rows, {len(to_keep)} kept, {len(existing_affected_df) - len(to_keep)} replaced")
         else:
             combined_df = new_df
-            log.info(f"Upsert: {len(new_df)} new rows (table was empty)")
+            log.info(f"Upsert: {len(new_df)} new rows (no existing data in partitions)")
         
-        # 5. Completely delete the old table directory
-        log.debug(f"Upsert: Removing old data at {table_path}...")
-        if table_path.exists():
-            shutil.rmtree(table_path)
-        
-        # 6. Write the new combined data from scratch
-        # Use 'overwrite_or_ignore' since the dir is now empty
+        # Overwrite the affected partitions
         write_partitioned_dataset(
             combined_df,
             table_path,
             partition_cols,
             schema,
-            mode="overwrite_or_ignore"
+            mode="delete_matching" # Delete matching partitions and write new data
         )
         
     except Exception as e:
@@ -361,11 +374,10 @@ def create_date_partition_column(
 
     elif isinstance(data, pd.DataFrame):
         # Handle pandas DataFrame
-        df = data # Use df for clarity
+        df = data 
         if timestamp_col not in df.columns:
             raise ValueError(f"Timestamp column '{timestamp_col}' not found in DataFrame")
         
-        # Ensure timestamp is datetime (coerce to UTC if needed)
         if not pd.api.types.is_datetime64_any_dtype(df[timestamp_col]):
             df[timestamp_col] = pd.to_datetime(df[timestamp_col], utc=True)
         

@@ -11,6 +11,9 @@ this source uses Strategy A (assumed home timezone).
 PARTITIONING: This table uses upsert_by_key(), which rewrites the entire
 dataset. To avoid 'Too many open files' errors, this table
 is partitioned MONTHLY ('M'), not daily.
+
+v2.1: Added drop_duplicates() to workout/set processing to
+handle re-ingestion of the same CSV file.
 """
 from __future__ import annotations
 
@@ -36,11 +39,6 @@ log = logging.getLogger(__name__)
 def parse_jefit_csv(csv_path: Path) -> dict[str, pd.DataFrame]:
     """
     Parse JEFIT CSV into section DataFrames.
-    
-    JEFIT exports multiple sections in one CSV, each with ### headers.
-    
-    Returns:
-        Dict mapping section name to DataFrame
     """
     sections = {}
     current_section = None
@@ -100,8 +98,6 @@ def process_workout_sessions(
 ) -> pd.DataFrame:
     """
     Process JEFIT workout sessions into workouts table format.
-    
-    Aggregates set data and creates workout-level records.
     """
     if sessions_df.empty:
         return pd.DataFrame()
@@ -112,7 +108,6 @@ def process_workout_sessions(
     for _, session in sessions_df.iterrows():
         session_id = session['_id']
         
-        # Get exercises for this session
         session_exercises = exercise_logs_df[
             exercise_logs_df['belongsession'] == session_id
         ]
@@ -120,16 +115,13 @@ def process_workout_sessions(
         if session_exercises.empty:
             continue
         
-        # Get sets for these exercises
         exercise_log_ids = session_exercises['_id'].tolist()
         session_sets = set_logs_df[
             set_logs_df['exercise_log_id'].isin(exercise_log_ids)
         ]
         
-        # JEFIT timestamps are Unix epoch seconds. Convert to naive datetime.
         start_naive = pd.to_datetime(session['starttime'], unit='s')
         
-        # --- Use Strategy A (Assumed Timezone) ---
         temp_df = pd.DataFrame([{"timestamp_local": start_naive}])
         temp_df = apply_strategy_a(temp_df, home_timezone=home_tz)
         
@@ -150,7 +142,6 @@ def process_workout_sessions(
             end_utc = None
             end_local = None
         
-        # Calculate aggregates from sets
         total_sets = len(session_sets)
         total_reps = session_sets['reps'].sum() if not session_sets.empty else 0
         total_volume_lbs = (
@@ -169,20 +160,23 @@ def process_workout_sessions(
             'timezone': tz_name,
             'tz_source': tz_source,
             'duration_s': duration_s,
-            
-            # Resistance training specific
             'total_sets': total_sets,
             'total_reps': int(total_reps) if pd.notna(total_reps) else None,
             'total_volume_lbs': float(total_volume_lbs) if pd.notna(total_volume_lbs) else None,
-            
-            # Session metadata
             'num_exercises': int(session.get('total_exercise', 0)) if pd.notna(session.get('total_exercise')) else None,
         }
         
         workouts.append(workout_record)
     
     df = pd.DataFrame(workouts)
+    
+    # --- THIS IS THE FIX ---
+    # Add lineage fields *first* so 'source' column exists
     df = add_lineage_fields(df, source='JEFIT', ingest_run_id=ingest_run_id)
+
+    # Deduplicate in case the CSV was processed before
+    df = df.drop_duplicates(subset=["workout_id", "source"], keep="last")
+    # --- END FIX ---
     
     return df
 
@@ -199,7 +193,6 @@ def process_resistance_sets(
     if set_logs_df.empty:
         return pd.DataFrame()
     
-    # Join sets with exercise info
     sets_with_exercise = set_logs_df.merge(
         exercise_logs_df[['_id', 'eid', 'ename', 'belongsession', 'mydate']],
         left_on='exercise_log_id',
@@ -208,10 +201,8 @@ def process_resistance_sets(
         suffixes=('', '_exercise')
     )
     
-    # Join with session to get workout_start_utc
     session_starts = sessions_df[['_id', 'starttime']].copy()
     
-    # Apply Strategy A to get the correct UTC start time
     home_tz = get_home_timezone()
     session_starts['timestamp_local'] = pd.to_datetime(session_starts['starttime'], unit='s')
     session_starts = apply_strategy_a(session_starts, home_timezone=home_tz)
@@ -229,7 +220,7 @@ def process_resistance_sets(
     
     for _, row in sets_with_session.iterrows():
         if pd.isna(row.get('workout_start_utc')):
-            continue # Skip sets from sessions that failed timestamp conversion
+            continue 
 
         session_id = row['belongsession']
         workout_id = f"jefit_{session_id}"
@@ -239,14 +230,10 @@ def process_resistance_sets(
             'workout_start_utc': row['workout_start_utc'],
             'exercise_id': str(row['eid']),
             'exercise_name': row['ename'],
-            'set_number': int(row['set_index']) + 1,  # Convert 0-indexed to 1-indexed
-            
-            # Set data
+            'set_number': int(row['set_index']) + 1,
             'actual_reps': int(row['reps']) if pd.notna(row['reps']) else None,
             'weight_lbs': float(row['weight_lbs']) if pd.notna(row['weight_lbs']) else None,
             'set_type': row.get('set_type', 'default'),
-            
-            # Optional fields (not in current JEFIT export)
             'target_reps': None,
             'rest_time_s': None,
             'is_warmup': row.get('set_type') == 'warmup',
@@ -259,7 +246,14 @@ def process_resistance_sets(
         resistance_sets.append(set_record)
     
     df = pd.DataFrame(resistance_sets)
+
+    # --- THIS IS THE FIX ---
+    # Add lineage fields *first* so 'source' column exists
     df = add_lineage_fields(df, source='JEFIT', ingest_run_id=ingest_run_id)
+
+    # Deduplicate in case the CSV was processed before
+    df = df.drop_duplicates(subset=["workout_id", "exercise_id", "set_number", "source"], keep="last")
+    # --- END FIX ---
     
     return df
 
@@ -267,19 +261,12 @@ def process_resistance_sets(
 def ingest_jefit_csv(csv_path: Path) -> dict[str, int]:
     """
     Main ingestion function for JEFIT CSV export.
-    
-    Args:
-        csv_path: Path to JEFIT CSV export
-        
-    Returns:
-        Dict with counts: {'workouts': N, 'sets': M}
     """
     ingest_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     
     log.info(f"Starting JEFIT ingestion (run_id={ingest_run_id})")
     log.info(f"Reading CSV: {csv_path}")
     
-    # Parse CSV sections
     sections = parse_jefit_csv(csv_path)
     
     required_sections = ['WORKOUT_SESSIONS', 'EXERCISE_LOGS', 'EXERCISE_SET_LOGS']
@@ -354,11 +341,9 @@ def main():
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
     
-    # Determine which file to process
     if args.csv_file:
         csv_path = Path(args.csv_file)
     else:
-        # Auto-scan for latest JEFIT export
         jefit_files = list(RAW_JEFIT_DIR.glob("*.csv"))
         if not jefit_files:
             print(f"❌ No CSV files found in {RAW_JEFIT_DIR}")
