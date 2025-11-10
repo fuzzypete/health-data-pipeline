@@ -122,6 +122,10 @@ ingest-protocols:
 
 # --- Aggregates & Utilities ---
 
+.PHONY: rebuild-history
+rebuild-history: clean-db clean-parquet fetch build-db create-views
+	@echo "--- 🚀 Historical rebuild complete! ---"	
+
 show-ingest:
 	@echo "INGEST_TARGETS => $(INGST_TARGETS)"
 

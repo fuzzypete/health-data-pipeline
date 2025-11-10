@@ -91,30 +91,30 @@ drive_sources:
     output_path: "Data/Raw/labs/protocols-master-latest.xlsx"
     sheet_name: "Events" # For the ingestion step
 
-  hae_daily_metrics:  # renamed from hae_csv
+  hae_daily_metrics:  
     type: "folder_sync"
     parent_folder_id: ""  # HDP_HAE_PARENT_ID from .env
-    folder_name: "Daily Health Metrics"  # NEW
+    folder_name: "Daily Health Metrics"  
     output_dir: "Data/Raw/HAE/CSV"  # keep same for existing hae_csv.py
     archive_subfolder_name: "Archive"
 
-  hae_daily_workouts:  # renamed from hae_json
+  hae_daily_workouts:  
     type: "folder_sync"
     parent_folder_id: ""  # HDP_HAE_PARENT_ID from .env
-    folder_name: "Daily Workouts"  # NEW
-    output_dir: "Data/Raw/HAE/JSON"  # for future hae_workouts.py
+    folder_name: "Daily Workouts"  
+    output_dir: "Data/Raw/HAE/JSON"  
     archive_subfolder_name: "Archive"
 
-  hae_quick_metrics:  # NEW - split from hae_quick
+  hae_quick_metrics:  
     type: "folder_sync"
     parent_folder_id: ""
-    folder_name: "Quick Health Metrics"  # NEW subfolder you'll create
-    output_dir: "Data/Raw/HAE/CSV"  # reuse same ingestion as daily
+    folder_name: "Quick Health Metrics"  
+    output_dir: "Data/Raw/HAE/CSV"  
     archive_subfolder_name: "Archive"
 
-  hae_quick_workouts:  # NEW - split from hae_quick  
+  hae_quick_workouts:  
     type: "folder_sync"
     parent_folder_id: ""
-    folder_name: "Quick Workouts"  # NEW subfolder you'll create
-    output_dir: "Data/Raw/HAE/Quick"  # needs NEW ingestion code
+    folder_name: "Quick Workouts"  
+    output_dir: "Data/Raw/HAE/JSON"  
     archive_subfolder_name: "Archive"
