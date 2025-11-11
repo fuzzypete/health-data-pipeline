@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive Parquet Table Validation Script (CORRECTED)
-
-Key Change: Tables using upsert_by_key MUST use monthly partitioning
-to avoid "too many open files" errors when rewriting entire table.
+Comprehensive Parquet Table Validation Script
 
 Validates:
 1. Partition structure (daily vs monthly - based on write strategy)
@@ -28,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
@@ -135,6 +133,10 @@ def check_partition_structure(
     table_name = config["path"].split("/")[-1]
     if "date" not in df.columns:
         if "year" in config.get("partition_cols", []):
+             # For 'year' partition, just check it exists
+             if df["year"].isnull().any():
+                 report.error(table_name, "Found null values in 'year' partition")
+                 return False
              report.success(table_name, f"Partitioning OK ({config['partition_period']})")
              return True
         report.warn(table_name, "No 'date' partition column found, skipping structure check")
@@ -326,7 +328,7 @@ class ValidationReport:
 
     def print_report(self):
         print("\n" + "=" * 80)
-        print("PARQUET VALIDATION REPORT (CORRECTED)")
+        print("PARQUET VALIDATION REPORT") # <-- (CORRECTED) removed
         print("=" * 80 + "\n")
         print("Partitioning Strategy:")
         print("  Daily (D):     delete_matching tables (minute_facts, daily_summary, oura_summary)")
@@ -373,14 +375,26 @@ def validate_table(table_name, config, report, verbose):
     print(f"\n--- Validating: {table_name} ---")
     
     try:
-        table_path = Path(config["path"])
+        # --- THIS IS THE FIX ---
+        # Build an absolute path to be safe
+        table_path = Path.cwd() / config["path"]
+        # --- END FIX ---
+        
         if not table_path.exists():
             report.warn(table_name, f"Table does not exist at {config['path']}")
             return False
 
         # --- Read Data (Schema and Partitions first) ---
-        dataset = ds.dataset(table_path, format="parquet", partitioning="hive")
-        schema = dataset.schema
+        try:
+            # Pass the clean base directory path
+            dataset = ds.dataset(table_path, format="parquet", partitioning="hive")
+            schema = dataset.schema
+        except pa.lib.ArrowInvalid as e:
+            if "No files found" in str(e) or "No Parquet files found" in str(e):
+                report.warn(table_name, "Table exists but contains no data fragments")
+                return True # Not an error, just empty
+            else:
+                raise # Re-raise any other unexpected Arrow error
         
         # Check 1: Schema
         if not check_schema(schema, config, report):
@@ -393,7 +407,6 @@ def validate_table(table_name, config, report, verbose):
                 part_expr = str(frag.partition_expression)
                 part_dict = {}
                 # This regex parses: (col1 == "val1") and (col2 == "val2")
-                # Also handles col="val" (no parens)
                 for col in config["partition_cols"]:
                     match = re.search(f'({col} == \\"([^\\"]+)\\")', part_expr)
                     if match:
@@ -403,8 +416,9 @@ def validate_table(table_name, config, report, verbose):
                     fragment_data.append(part_dict)
             
             if not fragment_data:
+                # This case should be caught by the ArrowInvalid error above
                 report.warn(table_name, "Table exists but contains no data fragments")
-                return True # Not an error, just empty
+                return True 
             
             partitions = pd.DataFrame(fragment_data).drop_duplicates()
             
@@ -419,11 +433,9 @@ def validate_table(table_name, config, report, verbose):
 
         # Check 2: Partition Structure
         if not check_partition_structure(partitions, config, report):
-             # Don't hard-fail, but log error
              pass
-
+             
         # --- Read Full Data ---
-        # Read using dataset.to_table() to get partition columns included
         df = dataset.to_table(columns=schema.names).to_pandas()
         
         # Check 3: PK Uniqueness
@@ -432,7 +444,7 @@ def validate_table(table_name, config, report, verbose):
 
         # Check 4: Source Values
         if not check_sources(df, config, report):
-            pass # Don't hard-fail, but log error
+            pass 
         
         # Check 5: Timestamps
         if not check_timestamps(df, config, report):
@@ -451,7 +463,7 @@ def validate_table(table_name, config, report, verbose):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate Parquet table structure and consistency (CORRECTED)"
+        description="Validate Parquet table structure and consistency"
     )
     parser.add_argument(
         "--table",

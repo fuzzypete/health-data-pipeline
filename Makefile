@@ -46,7 +46,8 @@ test:
 	poetry run pytest -q
 
 validate:
-	$(PYTHON) -m $(MODULE_ROOT).validate
+	@echo "--- Validating Parquet data lake integrity ---"
+	$(PYTHON) scripts/validate_parquet_tables.py
 
 image:
 	docker build -t hdp:dev .
