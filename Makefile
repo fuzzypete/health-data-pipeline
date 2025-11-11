@@ -268,6 +268,32 @@ drop-parquet:
 	@rm -rf -- "$(PARQUET_DIR)"
 	@echo "✅ Done."
 
+unarchive:
+	@echo "--- ♻️  Moving all archived files back to Data/Raw/ ---"
+	@# Create directories just in case they were deleted
+	@mkdir -p Data/Raw/HAE/CSV Data/Raw/HAE/JSON Data/Raw/HAE/Quick
+	@mkdir -p Data/Raw/JEFIT Data/Raw/Concept2 Data/Raw/labs
+	@mkdir -p Data/Raw/Oura/sleep Data/Raw/Oura/activity Data/Raw/Oura/readiness
+	
+	@# Move files, suppressing errors if source directory is empty
+	@echo "Unarchiving HAE CSV..."
+	@mv Data/Archive/HAE/CSV/* Data/Raw/HAE/CSV/ 2>/dev/null || true
+	@echo "Unarchiving HAE JSON..."
+	@mv Data/Archive/HAE/JSON/* Data/Raw/HAE/JSON/ 2>/dev/null || true
+	@echo "Unarchiving HAE Quick..."
+	@mv Data/Archive/HAE/Quick/* Data/Raw/HAE/Quick/ 2>/dev/null || true
+	@echo "Unarchiving JEFIT..."
+	@mv Data/Archive/JEFIT/* Data/Raw/JEFIT/ 2>/dev/null || true
+	@echo "Unarchiving Concept2..."
+	@mv Data/Archive/Concept2/* Data/Raw/Concept2/ 2>/dev/null || true
+	@echo "Unarchiving Labs..."
+	@mv Data/Archive/labs/* Data/Raw/labs/ 2>/dev/null || true
+	@echo "Unarchiving Oura..."
+	@mv DataData/Archive/Oura/sleep/* Data/Raw/Oura/sleep/ 2>/dev/null || true
+	@mv Data/Archive/Oura/activity/* Data/Raw/Oura/activity/ 2>/dev/null || true
+	@mv Data/Archive/Oura/readiness/* Data/Raw/Oura/readiness/ 2>/dev/null || true
+	@echo "✅ Unarchive complete."
+
 zipsrc:
 	@mkdir -p tmp
 	@ts=$$(date +"%Y%m%d-%H%M"); \

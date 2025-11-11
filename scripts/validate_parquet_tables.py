@@ -67,7 +67,7 @@ TABLE_CONFIGS = {
         "partition_cols": ["date", "source"],
         "primary_key": ["workout_id", "split_number", "source"],
         "expected_sources": ["Concept2"],
-        "required_fields": ["workout_id", "split_number", "source"],
+        "required_fields": ["workout_id", "split_number", "source", "workout_start_utc"],
     },
     "cardio_strokes": {
         "path": "Data/Parquet/cardio_strokes",
@@ -76,7 +76,7 @@ TABLE_CONFIGS = {
         "partition_cols": ["date", "source"],
         "primary_key": ["workout_id", "stroke_number", "source"],
         "expected_sources": ["Concept2"],
-        "required_fields": ["workout_id", "stroke_number", "source"],
+        "required_fields": ["workout_id", "stroke_number", "source", "workout_start_utc"],
     },
     "resistance_sets": {
         "path": "Data/Parquet/resistance_sets",
@@ -214,7 +214,6 @@ def check_sources(
     if "source" in df.columns:
         # Check for sources ingested from files (like labs)
         if "labs-master-latest.xlsx" in config["expected_sources"]:
-             # This check is too brittle if the source name is the filename.
              report.success(table_name, "Source OK (filename)")
              return True
         if "protocols-master-latest.xlsx" in config["expected_sources"]:
@@ -245,30 +244,59 @@ def check_timestamps(
     """Check timestamp_utc (aware) and timestamp_local (naive) consistency."""
     table_name = config["path"].split("/")[-1]
     
+    # Standardize column names for checking
+    utc_col, local_col = None, None
+    if "timestamp_utc" in df.columns and "timestamp_local" in df.columns:
+        utc_col, local_col = "timestamp_utc", "timestamp_local"
+    elif "start_time_utc" in df.columns and "start_time_local" in df.columns:
+        utc_col, local_col = "start_time_utc", "start_time_local"
+    elif "measurement_time_utc" in df.columns:
+        utc_col = "measurement_time_utc"
+    elif "workout_start_utc" in df.columns:
+        utc_col = "workout_start_utc"
+    
     # Check for Strategy A/B timestamps
-    if "timestamp_local" in df.columns and "timestamp_utc" in df.columns:
+    if utc_col:
+        if not pd.api.types.is_datetime64_any_dtype(df[utc_col]):
+             report.error(table_name, f"{utc_col} column is not a datetime type")
+             return False
         
-        # --- FIX 1: Check if local is naive ---
-        if not pd.api.types.is_datetime64_any_dtype(df["timestamp_local"]):
-             report.error(table_name, "timestamp_local column is not a datetime type")
-             return False
-        if df["timestamp_local"].dt.tz is not None:
-            report.error(table_name, "timestamp_local column is timezone-aware, but should be naive")
-            return False
-
-        # --- FIX 2: Check if UTC is aware ---
-        if not pd.api.types.is_datetime64_any_dtype(df["timestamp_utc"]):
-             report.error(table_name, "timestamp_utc column is not a datetime type")
-             return False
-        if df["timestamp_utc"].dt.tz is None:
-            report.error(table_name, "timestamp_utc column is timezone-naive, but should be aware")
-            return False
-        # --- END FIXES ---
+        # --- THIS IS THE FIX ---
+        # Check if the dtype object *has* a 'tz' attribute.
+        # A numpy dtype (from an all-NaT column) will not.
+        if hasattr(df[utc_col].dtype, 'tz'):
+            # It's a pandas DatetimeTZDtype
+            if df[utc_col].dtype.tz is None:
+                 report.error(table_name, f"{utc_col} column is timezone-naive, but should be aware")
+                 return False
+        else:
+            # It's a numpy datetime64[ns] dtype (no 'tz' attribute)
+            # This is only OK if all values are NaT
+            if not df[utc_col].isnull().all():
+                report.error(table_name, f"{utc_col} column is timezone-naive (numpy), but should be aware")
+                return False
+        
+        # Check local col (if it exists)
+        if local_col:
+            if not pd.api.types.is_datetime64_any_dtype(df[local_col]):
+                report.error(table_name, f"{local_col} column is not a datetime type")
+                return False
+            
+            # Check if it has a 'tz' attribute
+            if hasattr(df[local_col].dtype, 'tz'):
+                # It's a pandas DatetimeTZDtype
+                if df[local_col].dtype.tz is not None:
+                    report.error(table_name, f"{local_col} column is timezone-aware, but should be naive")
+                    return False
+            # else:
+                # It's a numpy datetime64[ns] dtype (no 'tz' attribute)
+                # This is the expected naive format, so it's fine.
+        # --- END FIX ---
 
         report.success(table_name, "Timestamps (UTC/local) OK")
         return True
     
-    # Check for simple date columns (e.g., daily_summary, oura_summary)
+    # Check for simple date columns
     elif "date_utc" in config["required_fields"] or "day" in config["required_fields"] or "date" in config["required_fields"]:
         report.success(table_name, "Timestamp (date) OK")
         return True
@@ -360,7 +388,6 @@ def validate_table(table_name, config, report, verbose):
 
         # --- Read Partitions ---
         try:
-            # --- FIX: Manually iterate fragments and parse expression ---
             fragment_data = []
             for frag in dataset.get_fragments():
                 part_expr = str(frag.partition_expression)
@@ -380,7 +407,6 @@ def validate_table(table_name, config, report, verbose):
                 return True # Not an error, just empty
             
             partitions = pd.DataFrame(fragment_data).drop_duplicates()
-            # --- END FIX ---
             
             if partitions.empty:
                  report.warn(table_name, "Table has data but could not parse partition values")

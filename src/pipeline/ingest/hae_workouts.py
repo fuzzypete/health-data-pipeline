@@ -14,13 +14,18 @@ backfills.
 
 v2.2: Added drop_duplicates() before upsert to handle overlapping
 raw JSON files (e.g., a daily file and a historical file).
+
+v2.5: Robust handling for concatenated JSON objects (the "append bug").
+Parses all objects in the file, validates consistency, and selects
+the candidate with the most data.
 """
 import logging
 import json
+from json import JSONDecoder
 import shutil
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import pandas as pd
 
@@ -115,7 +120,75 @@ def process_workout_json(workout_json: Dict[str, Any], ingest_run_id: str) -> Di
         log.error(f"Failed to process workout {workout_json.get('id')}: {e}", exc_info=True)
         return None
 
-def ingest_hae_workouts(limit: int = None) -> None:
+def resolve_concatenated_json(file_content: str, filename: str) -> List[Dict[str, Any]]:
+    """
+    Parses a file containing multiple concatenated JSON objects.
+    Returns the workout list from the 'best' object (most data).
+    """
+    decoder = JSONDecoder()
+    pos = 0
+    candidates = []
+
+    # 1. Decode all objects
+    while pos < len(file_content.strip()):
+        while pos < len(file_content) and file_content[pos].isspace():
+            pos += 1
+        if pos == len(file_content):
+            break
+        
+        try:
+            data, end_pos = decoder.raw_decode(file_content, pos)
+            pos = end_pos
+            
+            workouts = data.get('data', {}).get('workouts', [])
+            candidates.append(workouts)
+        except json.JSONDecodeError as e:
+            log.error(f"JSON decode error in {filename} at char {pos}: {e}")
+            break
+
+    if not candidates:
+        return []
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    log.info(f"Found {len(candidates)} concatenated objects in {filename}. Selecting best candidate...")
+
+    # 2. Analyze candidates to find the best one
+    best_candidate = None
+    max_count = -1
+    start_times = []
+
+    for i, workouts in enumerate(candidates):
+        count = len(workouts)
+        
+        # Get earliest timestamp for validation
+        first_start = None
+        if count > 0:
+            # Roughly sort to find earliest; standard string sort works for ISO-ish dates
+            sorted_w = sorted(workouts, key=lambda x: x.get('start', ''))
+            first_start = sorted_w[0].get('start')
+        
+        start_times.append(first_start)
+        
+        if count > max_count:
+            max_count = count
+            best_candidate = workouts
+
+    # 3. Validate consistency (Earliest start time should roughly match)
+    # We ignore None (empty candidates)
+    valid_starts = [s for s in start_times if s]
+    if valid_starts:
+        earliest_ref = min(valid_starts)
+        for s in valid_starts:
+            if s != earliest_ref:
+                log.warning(f"  ⚠️  Candidate start time mismatch! Found {s} vs {earliest_ref}. Proceeding with largest set.")
+
+    log.info(f"  -> Selected object with {max_count} workouts.")
+    return best_candidate or []
+
+
+def ingest_hae_workouts(limit: int = None, debug_mode: bool = False) -> None:
     """
     Ingest HAE workout JSON files from the raw directory.
     """
@@ -132,47 +205,57 @@ def ingest_hae_workouts(limit: int = None) -> None:
     
     for f_path in files:
         log.info(f"Processing file: {f_path.name}")
-        file_workouts: List[Dict[str, Any]] = []
+        
         try:
             with open(f_path, 'r') as f:
-                data = json.load(f)
+                file_content = f.read()
             
-            workouts_list = data.get('data', {}).get('workouts', [])
+            if not file_content.strip():
+                log.warning(f"Skipping empty file: {f_path.name}")
+                if not debug_mode:
+                    _archive_file(f_path)
+                continue
+
+            # Use the new robust resolver
+            workouts_list = resolve_concatenated_json(file_content, f_path.name)
             
+            file_workouts = []
             for workout_json in workouts_list:
                 record = process_workout_json(workout_json, ingest_run_id)
                 if record:
                     file_workouts.append(record)
-                    
-            if limit and len(all_workouts) + len(file_workouts) >= limit:
-                remaining_needed = limit - len(all_workouts)
-                all_workouts.extend(file_workouts[:remaining_needed])
+
+            all_workouts.extend(file_workouts)
+            log.info(f"Collected {len(file_workouts)} valid workouts from {f_path.name}")
+            
+            if limit and len(all_workouts) >= limit:
                 log.info(f"Reached processing limit ({limit})")
+                all_workouts = all_workouts[:limit]
                 break
             
-            all_workouts.extend(file_workouts)
-            
-            # --- We archive *after* processing, not before ---
-            # _archive_file(f_path) 
+            # Archive file after successful processing (if not in debug)
+            if not debug_mode:
+                _archive_file(f_path)
             total_processed_files += 1
                 
         except Exception as e:
-            log.error(f"Failed to read or parse {f_path.name}: {e}", exc_info=True)
+            log.error(f"Failed to read or process {f_path.name}: {e}", exc_info=True)
+        
+        if limit and len(all_workouts) >= limit:
+            break
     
     if not all_workouts:
         log.info(f"No valid workouts found to ingest from {total_processed_files} files.")
         return
     
-    log.info(f"Read {len(all_workouts)} workouts from {total_processed_files} files.")
+    log.info(f"Total: Read {len(all_workouts)} workouts from {total_processed_files} files.")
     
     df = pd.DataFrame(all_workouts)
 
-    # --- THIS IS THE FIX for Duplicates ---
-    # Deduplicate the in-memory list BEFORE writing
-    log.info(f"Found {len(df)} total workouts in JSON files, deduplicating...")
+    # --- Deduplicate in-memory list BEFORE writing ---
+    log.info(f"Found {len(df)} total workouts loaded, deduplicating...")
     df = df.drop_duplicates(subset=["workout_id", "source"], keep="last")
     log.info(f"Deduplicated to {len(df)} unique workouts.")
-    # --- END FIX ---
     
     # Ensure schema
     for col in WORKOUTS_SCHEMA.names:
@@ -194,17 +277,9 @@ def ingest_hae_workouts(limit: int = None) -> None:
         schema=WORKOUTS_SCHEMA,
     )
     
-    # --- NOW we can archive the files ---
-    # (Only archive if the upsert was successful)
-    if not args.debug: # Add a debug flag check if you want
-        log.info(f"Archiving {len(files)} processed JSON files...")
-        for f_path in files:
-             _archive_file(f_path)
-    
     log.info("HAE Workout JSON ingestion complete.")
 
 def main():
-    global args # Make args global so ingest_hae_workouts can see it
     import argparse
     parser = argparse.ArgumentParser(description="Ingest HAE Workout JSON")
     parser.add_argument("--limit", type=int, default=None, help="Max number of workouts to process")
@@ -220,7 +295,7 @@ def main():
         )
     
     try:
-        ingest_hae_workouts(limit=args.limit)
+        ingest_hae_workouts(limit=args.limit, debug_mode=args.debug)
         print("\n✅ HAE Workout ingestion complete.")
     except Exception as e:
         log.exception("Ingestion failed")
