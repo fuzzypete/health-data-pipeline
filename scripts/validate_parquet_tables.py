@@ -263,50 +263,39 @@ def check_timestamps(
              report.error(table_name, f"{utc_col} column is not a datetime type")
              return False
         
-        # --- THIS IS THE FIX ---
-        # Check if the dtype object *has* a 'tz' attribute.
-        # A numpy dtype (from an all-NaT column) will not.
-        if hasattr(df[utc_col].dtype, 'tz'):
-            # It's a pandas DatetimeTZDtype
+        if isinstance(df[utc_col].dtype, pd.DatetimeTZDtype):
             if df[utc_col].dtype.tz is None:
                  report.error(table_name, f"{utc_col} column is timezone-naive, but should be aware")
                  return False
         else:
-            # It's a numpy datetime64[ns] dtype (no 'tz' attribute)
-            # This is only OK if all values are NaT
             if not df[utc_col].isnull().all():
                 report.error(table_name, f"{utc_col} column is timezone-naive (numpy), but should be aware")
                 return False
         
-        # Check local col (if it exists)
         if local_col:
             if not pd.api.types.is_datetime64_any_dtype(df[local_col]):
                 report.error(table_name, f"{local_col} column is not a datetime type")
                 return False
             
-            # Check if it has a 'tz' attribute
-            if hasattr(df[local_col].dtype, 'tz'):
-                # It's a pandas DatetimeTZDtype
+            if isinstance(df[local_col].dtype, pd.DatetimeTZDtype):
                 if df[local_col].dtype.tz is not None:
                     report.error(table_name, f"{local_col} column is timezone-aware, but should be naive")
                     return False
-            # else:
-                # It's a numpy datetime64[ns] dtype (no 'tz' attribute)
-                # This is the expected naive format, so it's fine.
-        # --- END FIX ---
 
         report.success(table_name, "Timestamps (UTC/local) OK")
         return True
     
-    # Check for simple date columns
-    elif "date_utc" in config["required_fields"] or "day" in config["required_fields"] or "date" in config["required_fields"]:
+    # Check for simple date columns (like in labs and protocol_history)
+    elif ("date_utc" in config["required_fields"] or 
+          "day" in config["required_fields"] or 
+          "date" in config["required_fields"] or 
+          "start_date" in config["required_fields"]):  # <-- ADDED THIS
         report.success(table_name, "Timestamp (date) OK")
         return True
     
     else:
         report.warn(table_name, "No standard timestamp columns found, skipping check")
         return True
-
 
 # --- MAIN VALIDATION ---
 
@@ -370,74 +359,86 @@ class ValidationReport:
         print("=" * 80)
 
 
+# In scripts/validate_parquet_tables.py
+
+# In scripts/validate_parquet_tables.py
+
 def validate_table(table_name, config, report, verbose):
     """Run all validation checks for a single table."""
     print(f"\n--- Validating: {table_name} ---")
-    
+
     try:
-        # --- THIS IS THE FIX ---
-        # Build an absolute path to be safe
         table_path = Path.cwd() / config["path"]
-        # --- END FIX ---
         
         if not table_path.exists():
-            report.warn(table_name, f"Table does not exist at {config['path']}")
+            report.warn(table_name, f"Table directory does not exist at {config['path']}")
             return False
 
-        # --- Read Data (Schema and Partitions first) ---
-        try:
-            # Pass the clean base directory path
-            dataset = ds.dataset(table_path, format="parquet", partitioning="hive")
-            schema = dataset.schema
-        except pa.lib.ArrowInvalid as e:
-            if "No files found" in str(e) or "No Parquet files found" in str(e):
-                report.warn(table_name, "Table exists but contains no data fragments")
-                return True # Not an error, just empty
-            else:
-                raise # Re-raise any other unexpected Arrow error
+        # --- THIS IS THE PROVEN-WORKING READ STRATEGY ---
+        # (Based on debug_arrow_read.py)
         
-        # Check 1: Schema
+        if verbose:
+            print(f"  [Debug] Using pathlib.glob to find files in: {table_path}")
+
+        try:
+            # 1. Use Python's built-in, reliable glob
+            file_list = list(table_path.glob("**/*.parquet"))
+            
+            if not file_list:
+                # This is the "no data fragments" case
+                report.warn(table_name, "Table exists but contains no data fragments")
+                return True # Not an error
+            
+            # 2. Convert Path objects to strings for PyArrow
+            file_list_str = [str(f) for f in file_list]
+            
+            if verbose:
+                print(f"  [Debug] Found {len(file_list_str)} files. First: {file_list_str[0].replace(str(Path.cwd()), '...')}")
+
+            # 3. Pass the *explicit list* of files to pq.read_table
+            df_table = pq.read_table(
+                file_list_str,
+                partitioning="hive"
+            )
+            
+            # 4. If the table is empty (e.g., all files are 0 rows), it's still not an error
+            if df_table.num_rows == 0:
+                report.warn(table_name, "Table exists but contains no data fragments (files are empty)")
+                return True
+
+            # 5. Get the schema from the loaded table.
+            schema = df_table.schema
+            
+            # 6. Convert to pandas
+            df = df_table.to_pandas()
+
+        except (pa.lib.ArrowInvalid, FileNotFoundError) as e:
+            # This shouldn't be hit now, but as a safeguard
+            report.warn(table_name, f"Table exists but contains no data fragments ({type(e).__name__})")
+            return True
+        # --- END PROVEN-WORKING READ STRATEGY ---
+
+        if verbose:
+            print(f"  [Debug] Found {len(df)} total rows across all partitions.")
+        
+        # Check 1: Schema (now that we have it)
         if not check_schema(schema, config, report):
             return False # Stop if schema is wrong
 
-        # --- Read Partitions ---
-        try:
-            fragment_data = []
-            for frag in dataset.get_fragments():
-                part_expr = str(frag.partition_expression)
-                part_dict = {}
-                # This regex parses: (col1 == "val1") and (col2 == "val2")
-                for col in config["partition_cols"]:
-                    match = re.search(f'({col} == \\"([^\\"]+)\\")', part_expr)
-                    if match:
-                        part_dict[col] = match.group(2)
-                
-                if part_dict:
-                    fragment_data.append(part_dict)
-            
-            if not fragment_data:
-                # This case should be caught by the ArrowInvalid error above
-                report.warn(table_name, "Table exists but contains no data fragments")
-                return True 
-            
-            partitions = pd.DataFrame(fragment_data).drop_duplicates()
-            
-            if partitions.empty:
-                 report.warn(table_name, "Table has data but could not parse partition values")
-                 return True
-
-        except Exception as e:
-            report.error(table_name, f"Failed to read partition fragments: {e}")
-            if verbose: import traceback; traceback.print_exc()
-            return False
-
         # Check 2: Partition Structure
-        if not check_partition_structure(partitions, config, report):
-             pass
-             
-        # --- Read Full Data ---
-        df = dataset.to_table(columns=schema.names).to_pandas()
-        
+        partition_cols = config.get("partition_cols", [])
+        if partition_cols:
+            missing_part_cols = [c for c in partition_cols if c not in df.columns]
+            if missing_part_cols:
+                report.error(table_name, f"Partition column(s) {missing_part_cols} not loaded into DataFrame.")
+                return False
+            
+            partitions = df[partition_cols].drop_duplicates()
+            if not check_partition_structure(partitions, config, report):
+                 pass
+        else:
+            report.warn(table_name, "No partition_cols defined, skipping structure check")
+
         # Check 3: PK Uniqueness
         if not check_pk_uniqueness(df, config, report, verbose):
             return False
@@ -459,8 +460,7 @@ def validate_table(table_name, config, report, verbose):
             import traceback
             traceback.print_exc()
         return False
-
-
+                
 def main():
     parser = argparse.ArgumentParser(
         description="Validate Parquet table structure and consistency"
