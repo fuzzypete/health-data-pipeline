@@ -22,6 +22,7 @@ build/
 *.env
 .env
 oura_tokens.json
+config.yaml
 
 # IDE
 .vscode/
