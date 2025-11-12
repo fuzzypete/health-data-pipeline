@@ -305,6 +305,7 @@ class ValidationReport:
         self.successes = defaultdict(list)
         self.warnings = defaultdict(list)
         self.errors = defaultdict(list)
+        self.stats = {}  # <-- ADD THIS
 
     def success(self, table, msg):
         self.successes[table].append(msg)
@@ -314,10 +315,16 @@ class ValidationReport:
 
     def error(self, table, msg):
         self.errors[table].append(msg)
+    
+    # --- ADD THIS NEW METHOD ---
+    def add_stat(self, table: str, stat_message: str):
+        """Add a formatted stat string for a table."""
+        self.stats[table] = stat_message
+    # --- END ADD ---
 
     def print_report(self):
         print("\n" + "=" * 80)
-        print("PARQUET VALIDATION REPORT") # <-- (CORRECTED) removed
+        print("PARQUET VALIDATION REPORT")
         print("=" * 80 + "\n")
         print("Partitioning Strategy:")
         print("  Daily (D):     delete_matching tables (minute_facts, daily_summary, oura_summary)")
@@ -341,25 +348,35 @@ class ValidationReport:
         print("\n" + "=" * 80)
         print("TABLE STATISTICS")
         print("=" * 80)
+        
+        # --- REPLACE THE OLD 'TABLE STATISTICS' LOOP WITH THIS ---
         for table in sorted(TABLE_CONFIGS.keys()):
-            stats = f"  - {table}:"
+            # Get status icon
             if table in self.errors:
-                stats += " ❌ FAILED"
+                status_icon = "❌ FAILED"
             elif table in self.warnings:
-                stats += " ⚠ WARNED"
+                status_icon = "⚠ WARNED"
             elif table in self.successes:
-                stats += " ✅ PASSED"
+                status_icon = "✅ PASSED"
             else:
-                stats += " ❔ SKIPPED (Not Found?)"
-            print(stats)
+                status_icon = "❔ SKIPPED"
+
+            # Get stat string, default to status if no stats were added
+            stat_msg = self.stats.get(table, status_icon)
+            
+            # For PASSED/WARNED, the stat msg is the primary info
+            if status_icon in ("✅ PASSED", "⚠ WARNED"):
+                print(f"  - {table:<20} {status_icon:<10} | {stat_msg}")
+            else:
+                # For FAILED/SKIPPED, the status is the primary info
+                print(f"  - {table:<20} {stat_msg}")
+        # --- END REPLACEMENT ---
 
         print("\n" + "=" * 80)
         status = "❌ VALIDATION FAILED" if self.errors else "✅ VALIDATION PASSED"
         print(f"{status}: {sum(len(v) for v in self.errors.values())} errors, {sum(len(v) for v in self.warnings.values())} warnings")
         print("=" * 80)
 
-
-# In scripts/validate_parquet_tables.py
 
 # In scripts/validate_parquet_tables.py
 
@@ -372,65 +389,61 @@ def validate_table(table_name, config, report, verbose):
         
         if not table_path.exists():
             report.warn(table_name, f"Table directory does not exist at {config['path']}")
+            report.add_stat(table_name, "SKIPPED (Not Found?)") # <-- Add stat
             return False
 
-        # --- THIS IS THE PROVEN-WORKING READ STRATEGY ---
-        # (Based on debug_arrow_read.py)
-        
+        # --- PROVEN-WORKING READ STRATEGY ---
         if verbose:
             print(f"  [Debug] Using pathlib.glob to find files in: {table_path}")
 
         try:
-            # 1. Use Python's built-in, reliable glob
             file_list = list(table_path.glob("**/*.parquet"))
             
             if not file_list:
-                # This is the "no data fragments" case
                 report.warn(table_name, "Table exists but contains no data fragments")
-                return True # Not an error
+                report.add_stat(table_name, "0 rows") # <-- Add stat
+                return True
             
-            # 2. Convert Path objects to strings for PyArrow
             file_list_str = [str(f) for f in file_list]
             
             if verbose:
                 print(f"  [Debug] Found {len(file_list_str)} files. First: {file_list_str[0].replace(str(Path.cwd()), '...')}")
 
-            # 3. Pass the *explicit list* of files to pq.read_table
             df_table = pq.read_table(
                 file_list_str,
                 partitioning="hive"
             )
             
-            # 4. If the table is empty (e.g., all files are 0 rows), it's still not an error
             if df_table.num_rows == 0:
                 report.warn(table_name, "Table exists but contains no data fragments (files are empty)")
+                report.add_stat(table_name, "0 rows") # <-- Add stat
                 return True
 
-            # 5. Get the schema from the loaded table.
             schema = df_table.schema
-            
-            # 6. Convert to pandas
             df = df_table.to_pandas()
 
         except (pa.lib.ArrowInvalid, FileNotFoundError) as e:
-            # This shouldn't be hit now, but as a safeguard
             report.warn(table_name, f"Table exists but contains no data fragments ({type(e).__name__})")
+            report.add_stat(table_name, "0 rows (read error)") # <-- Add stat
             return True
-        # --- END PROVEN-WORKING READ STRATEGY ---
+        # --- END READ STRATEGY ---
 
         if verbose:
             print(f"  [Debug] Found {len(df)} total rows across all partitions.")
         
-        # Check 1: Schema (now that we have it)
+        # Check 1: Schema
         if not check_schema(schema, config, report):
-            return False # Stop if schema is wrong
+            report.add_stat(table_name, f"{len(df)} rows (Schema FAILED)") # <-- Add stat
+            return False
 
-        # Check 2: Partition Structure
+        # --- (Checks 2, 3, 4, 5...) ---
+        # (No changes needed to the check functions themselves)
         partition_cols = config.get("partition_cols", [])
         if partition_cols:
             missing_part_cols = [c for c in partition_cols if c not in df.columns]
             if missing_part_cols:
                 report.error(table_name, f"Partition column(s) {missing_part_cols} not loaded into DataFrame.")
+                report.add_stat(table_name, f"{len(df)} rows (Partition FAILED)") # <-- Add stat
                 return False
             
             partitions = df[partition_cols].drop_duplicates()
@@ -439,28 +452,58 @@ def validate_table(table_name, config, report, verbose):
         else:
             report.warn(table_name, "No partition_cols defined, skipping structure check")
 
-        # Check 3: PK Uniqueness
         if not check_pk_uniqueness(df, config, report, verbose):
+            report.add_stat(table_name, f"{len(df)} rows (PK FAILED)") # <-- Add stat
             return False
 
-        # Check 4: Source Values
         if not check_sources(df, config, report):
             pass 
         
-        # Check 5: Timestamps
         if not check_timestamps(df, config, report):
+            report.add_stat(table_name, f"{len(df)} rows (Timestamp FAILED)") # <-- Add stat
             return False
+        
+        # --- ADD STATS ON SUCCESS ---
+        row_count = len(df)
+        
+        # Find the primary date column for stats
+        date_col = None
+        if "start_time_local" in df.columns: date_col = "start_time_local"
+        elif "timestamp_local" in df.columns: date_col = "timestamp_local"
+        elif "day" in df.columns: date_col = "day"
+        elif "date" in df.columns: date_col = "date"
+        elif "start_date" in df.columns: date_col = "start_date"
+        elif "workout_start_utc" in df.columns: date_col = "workout_start_utc"
+        elif "timestamp_utc" in df.columns: date_col = "timestamp_utc"
+
+        stat_msg = f"{row_count:,} rows" # Add comma for readability
+        if date_col:
+            try:
+                if not pd.api.types.is_datetime64_any_dtype(df[date_col]):
+                     df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                
+                min_date = df[date_col].min()
+                max_date = df[date_col].max()
+                
+                if pd.notna(min_date) and pd.notna(max_date):
+                    stat_msg += f" | {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}"
+            except Exception:
+                stat_msg += " | (date range error)"
+        
+        report.add_stat(table_name, stat_msg)
+        # --- END ADD STATS ---
 
         report.success(table_name, "All checks passed")
         return True
 
     except Exception as e:
         report.error(table_name, f"Validation failed with exception: {e}")
+        report.add_stat(table_name, "FAILED TO LOAD") # <-- Add stat
         if verbose:
             import traceback
             traceback.print_exc()
         return False
-                
+                    
 def main():
     parser = argparse.ArgumentParser(
         description="Validate Parquet table structure and consistency"

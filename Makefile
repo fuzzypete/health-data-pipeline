@@ -89,7 +89,7 @@ ingest-concept2:
 # 5-year lookback for rebuilds
 ingest-concept2-history:
 	@echo "--- Ingesting Concept2 HISTORY from $(REBUILD_START_DATE) to $(END_DATE) ---"
-	$(PYTHON) -m $(MODULE_ROOT).concept2_api --from-date $(REBUILD_START_DATE) --to-date $(END_DATE) --no-strokes
+	$(PYTHON) -m $(MODULE_ROOT).concept2_api --from-date $(REBUILD_START_DATE) --to-date $(END_DATE)
 
 backfill-lactate:
 	@echo "Backfilling lactate measurements from Concept2 comments..."
@@ -97,7 +97,7 @@ backfill-lactate:
 
 # --- Oura ---
 
-ingest-oura: fetch-oura
+ingest-oura: 
 	@echo "--- Ingesting Oura JSON into Parquet oura_summary ---"
 	$(PYTHON) -m $(MODULE_ROOT).oura_json
 
@@ -137,22 +137,42 @@ ingest-protocols:
 
 # --- Aggregates & Utilities ---
 
+# Define the targets that process data from Data/Raw
+# We list them manually to avoid running fetch-daily (redundant) or the 3-day ingest-concept2
+HISTORICAL_PROCESS_TARGETS := ingest-hae-quick ingest-hae ingest-hae-workouts ingest-oura ingest-jefit ingest-labs ingest-protocols
+
 .PHONY: rebuild-history
-rebuild-history: # This is a placeholder, as your old one was broken
-	@echo "--- Running FULL historical rebuild ---"
-	@echo "Step 1: Fetching ALL Google Drive history (daily, quick, labs, etc)..."
-	$(MAKE) fetch-all
-	@echo "Step 2: Fetching ALL Concept2 history..."
-	$(MAKE) ingest-concept2-history
-	@echo "Step 3: Running all processing scripts..."
+rebuild-history:
+	@echo "--- 1/7: Dropping entire Parquet data lake ---"
+	@$(MAKE) drop-parquet CONFIRM=1
+
+	@echo "--- 2/7: Unarchiving local raw files from Data/Archive ---"
+	@$(MAKE) unarchive
+
+	@echo "--- 3/7: Fetching ALL historical G-Drive sources (Labs, Protocols, HAE) ---"
+	@$(MAKE) fetch-all
+
+	@echo "--- 4/7: Fetching ALL historical API data (from 2020-01-01) ---"
+	@echo "Fetching Oura history..."
+	@$(MAKE) fetch-oura START_DATE=2020-01-01
+	@echo "Fetching Concept2 history..."
+	@$(MAKE) ingest-concept2-history REBUILD_START_DATE=2020-01-01
+
+	@echo "--- 5/7: Ingesting all fetched data into Parquet ---"
 	@set -e; \
-	for t in $(DAILY_INGEST_TARGETS); do \
+	for t in $(HISTORICAL_PROCESS_TARGETS); do \
 		echo ""; \
 		echo "=== Running $$t ==="; \
 		$(MAKE) $$t; \
 	done
-	@echo "--- 🚀 Historical rebuild complete! ---"	
 
+	@echo "--- 6/7: Rebuilding DuckDB views ---"
+	@$(MAKE) duck.views
+
+	@echo "--- 7/7: Validating rebuilt data lake ---"
+	@$(MAKE) validate
+	@echo ""
+	@echo "✅ --- Historical rebuild complete! ---"
 
 show-ingest:
 	@echo "INGEST_TARGETS => $(INGEST_TARGETS)"

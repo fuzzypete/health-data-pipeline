@@ -315,6 +315,12 @@ def process_strokes(
 
     rows = []
     for i, stroke in enumerate(strokes_json, start=1):
+        # --- THIS IS THE FIX ---
+        # Get the values. They can be 0 or None.
+        pace = stroke.get("p")
+        hr = stroke.get("hr")
+        spm = stroke.get("spm")
+
         rows.append(
             {
                 "workout_id": workout_id,
@@ -322,11 +328,13 @@ def process_strokes(
                 "stroke_number": i,
                 "time_cumulative_s": int(stroke["t"]),
                 "distance_cumulative_m": int(stroke["d"]),
-                "pace_500m_cs": int(stroke.get("p")) if stroke.get("p") else None,
-                "heart_rate_bpm": int(stroke.get("hr")) if stroke.get("hr") else None,
-                "stroke_rate_spm": int(stroke.get("spm")) if stroke.get("spm") else None,
+                # Explicitly check for None, so that 0 is preserved
+                "pace_500m_cs": int(pace) if pace is not None else None,
+                "heart_rate_bpm": int(hr) if hr is not None else None,
+                "stroke_rate_spm": int(spm) if spm is not None else None,
             }
         )
+        # --- END FIX ---
 
     df = pd.DataFrame(rows)
     df = add_lineage_fields(df, source="Concept2", ingest_run_id=ingest_run_id)
