@@ -427,88 +427,99 @@ def ingest_workouts_by_date(
     if all_workouts:
         workouts_combined = pd.concat(all_workouts, ignore_index=True)
 
-        # local date filtering (belt-and-suspenders)
-        workouts_combined["date_only"] = (
-            workouts_combined["start_time_local"].dt.date
-        )
-        f = pd.to_datetime(from_date).date()
-        t = pd.to_datetime(to_date).date()
-        workouts_combined = workouts_combined[
-            (workouts_combined["date_only"] >= f) &
-            (workouts_combined["date_only"] <= t)
-        ]
-        workouts_combined = workouts_combined.drop(columns=["date_only"])
-
-        workouts_combined = create_date_partition_column(
-            workouts_combined, "start_time_utc", "date", "M"
-        )
-
-        upsert_by_key(
-            workouts_combined,
-            WORKOUTS_PATH,
-            primary_key=["workout_id", "source"],
-            partition_cols=["date", "source"],
-            schema=get_schema("workouts"),
-        )
-        counts["workouts"] = len(workouts_combined)
-        log.info(f"Wrote {counts['workouts']} workouts")
-
-        # ---- Extract lactate from comments ----  # 
-        log.info("Extracting lactate measurements from comments...")
-        lactate_df = extract_lactate_from_workouts(
-            workouts_combined,
-            ingest_run_id,
-            source="Concept2_Comment"
-        )
-        
-        if not lactate_df.empty:
-            lactate_df = create_date_partition_column(
-                lactate_df, "workout_start_utc", "date", "M"
+        if workouts_combined.empty:
+            log.info("No workouts found in date range after filtering.")
+            all_workouts = [] # Ensure list is empty for next check
+        else:        
+            # local date filtering (belt-and-suspenders)
+            workouts_combined["date_only"] = (
+                workouts_combined["start_time_local"].dt.date
             )
-            lactate_table = create_lactate_table(lactate_df)
-            
+            f = pd.to_datetime(from_date).date()
+            t = pd.to_datetime(to_date).date()
+            workouts_combined = workouts_combined[
+                (workouts_combined["date_only"] >= f) &
+                (workouts_combined["date_only"] <= t)
+            ]
+            workouts_combined = workouts_combined.drop(columns=["date_only"])
+
+            workouts_combined = create_date_partition_column(
+                workouts_combined, "start_time_utc", "date", "M"
+            )
+
             upsert_by_key(
-                lactate_df,
-                LACTATE_PATH,
+                workouts_combined,
+                WORKOUTS_PATH,
                 primary_key=["workout_id", "source"],
                 partition_cols=["date", "source"],
-                schema=get_schema("lactate"),
+                schema=get_schema("workouts"),
             )
-            counts["lactate"] = len(lactate_df)
-            log.info(f"Extracted {counts['lactate']} lactate measurements")
-        else:
-            counts["lactate"] = 0
-            log.info("No lactate measurements found in comments")
+            counts["workouts"] = len(workouts_combined)
+            log.info(f"Wrote {counts['workouts']} workouts")
+
+            # ---- Extract lactate from comments ----  # 
+            log.info("Extracting lactate measurements from comments...")
+            lactate_df = extract_lactate_from_workouts(
+                workouts_combined,
+                ingest_run_id,
+                source="Concept2_Comment"
+            )
+            
+            if not lactate_df.empty:
+                lactate_df = create_date_partition_column(
+                    lactate_df, "workout_start_utc", "date", "M"
+                )
+                lactate_table = create_lactate_table(lactate_df)
+                
+                upsert_by_key(
+                    lactate_df,
+                    LACTATE_PATH,
+                    primary_key=["workout_id", "source"],
+                    partition_cols=["date", "source"],
+                    schema=get_schema("lactate"),
+                )
+                counts["lactate"] = len(lactate_df)
+                log.info(f"Extracted {counts['lactate']} lactate measurements")
+            else:
+                counts["lactate"] = 0
+                log.info("No lactate measurements found in comments")
 
     if all_splits:
         splits_combined = pd.concat(all_splits, ignore_index=True)
-        splits_combined = create_date_partition_column(
-            splits_combined, "workout_start_utc", "date", "M"
-        )
-        upsert_by_key(
-            splits_combined,
-            CARDIO_SPLITS_PATH,
-            primary_key=["workout_id", "split_number", "source"],
-            partition_cols=["date", "source"],
-            schema=get_schema("cardio_splits"),
-        )
-        counts["splits"] = len(splits_combined)
-        log.info(f"Wrote {counts['splits']} splits")
+        if splits_combined.empty:
+            log.info("No splits found to write.")
+            all_splits = [] # Ensure list is empty for next check
+        else:
+            splits_combined = create_date_partition_column(
+                splits_combined, "workout_start_utc", "date", "M"
+            )
+            upsert_by_key(
+                splits_combined,
+                CARDIO_SPLITS_PATH,
+                primary_key=["workout_id", "split_number", "source"],
+                partition_cols=["date", "source"],
+                schema=get_schema("cardio_splits"),
+            )
+            counts["splits"] = len(splits_combined)
+            log.info(f"Wrote {counts['splits']} splits")
 
     if all_strokes:
         strokes_combined = pd.concat(all_strokes, ignore_index=True)
-        strokes_combined = create_date_partition_column(
-            strokes_combined, "workout_start_utc", "date", "M"
-        )
-        upsert_by_key(
-            strokes_combined,
-            CARDIO_STROKES_PATH,
-            primary_key=["workout_id", "stroke_number", "source"],
-            partition_cols=["date", "source"],
-            schema=get_schema("cardio_strokes"),
-        )
-        counts["strokes"] = len(strokes_combined)
-        log.info(f"Wrote {counts['strokes']} strokes")
+        if strokes_combined.empty:
+            log.info("No strokes found to write.")
+        else:
+            strokes_combined = create_date_partition_column(
+                strokes_combined, "workout_start_utc", "date", "M"
+            )
+            upsert_by_key(
+                strokes_combined,
+                CARDIO_STROKES_PATH,
+                primary_key=["workout_id", "stroke_number", "source"],
+                partition_cols=["date", "source"],
+                schema=get_schema("cardio_strokes"),
+            )
+            counts["strokes"] = len(strokes_combined)
+            log.info(f"Wrote {counts['strokes']} strokes")
 
     log.info(f"Concept2 ingestion complete: {counts}")
     return counts

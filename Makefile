@@ -272,8 +272,35 @@ duck.query:
 	@test -n "$(SQL)" || (echo 'Usage: make duck.query SQL="SELECT …"'; exit 1)
 	@# Run query from project root
 	poetry run duckdb "$(DUCKDB_FILE)" -c "$(SQL)"
-# --- END NEW DuckDB SECTION ---
 
+# =============================================================================
+# Analysis Targets
+# =============================================================================
+
+.PHONY: analysis.hr analysis.z2 analysis.clean analysis.help
+
+analysis.hr:
+	@echo "Running recovery HR baseline analysis..."
+	poetry run python analysis/scripts/run_hr_analysis.py \
+		--output analysis/outputs/recovery_weekly_$(shell date +%Y%m%d).csv
+
+analysis.z2:
+	@echo "Running Zone 2 power analysis..."
+	poetry run python analysis/scripts/run_z2_analysis.py
+
+analysis.clean:
+	@echo "Cleaning analysis outputs..."
+	@rm -rf analysis/outputs/*.csv analysis/outputs/*.png analysis/outputs/*.html
+	@echo "✅ Analysis outputs cleaned"
+
+analysis.help:
+	@echo "Analysis targets:"
+	@echo "  analysis.hr      - Run recovery HR baseline analysis"
+	@echo "  analysis.z2      - Run Zone 2 power analysis"
+	@echo "  analysis.clean   - Clean generated outputs"
+
+
+# This allows you to run: make analysis.run SCRIPT=run_hr_analysis
 # ============================================================================
 # Maintenance & Utilities
 # ============================================================================

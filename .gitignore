@@ -31,3 +31,15 @@ config.yaml
 # OS
 .DS_Store
 Thumbs.db
+
+# Analysis outputs
+analytics/outputs/
+analytics/notebooks/.ipynb_checkpoints/
+
+# Analysis outputs (regeneratable)
+analysis/outputs/*
+!analysis/outputs/.gitkeep
+
+# Jupyter checkpoints
+analysis/notebooks/.ipynb_checkpoints/
+*.ipynb_checkpoints/
