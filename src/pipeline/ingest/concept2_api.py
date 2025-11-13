@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
+import json  # Added for debugging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -191,8 +192,18 @@ class Concept2Client:
             List of stroke dicts or None if not available
         """
         try:
+            # In get_workout_strokes method, add after line 195:
             response = self._request('GET', f'/users/me/results/{workout_id}/strokes')
-            return response.get('data', [])
+            strokes_data = response.get('data', [])
+
+            # Debug log the structure
+            if strokes_data and workout_type == "FixedTimeSplits":
+                log.info(f"FixedTimeSplits strokes structure: {type(strokes_data)}")
+                if strokes_data:
+                    log.info(f"First element type: {type(strokes_data[0])}")
+                    log.info(f"First element: {json.dumps(strokes_data[0], indent=2)}")
+
+            return strokes_data
         except Exception as e:
             log.warning(f"Could not fetch strokes for workout {workout_id}: {e}")
             return None
@@ -225,7 +236,15 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
     erg_type = workout_json.get("type", "rower").strip().lower()
     workout_type = ERG_TYPE_MAP.get(erg_type, "Rowing")
 
-    hr_data = workout_json.get("heart_rate", {})
+    # --- FIX for 'list' object has no attribute 'get' ---
+    hr_data = workout_json.get("heart_rate")
+    if not isinstance(hr_data, dict):
+        hr_data = {}
+
+    workout_data = workout_json.get("workout")
+    if not isinstance(workout_data, dict):
+        workout_data = {}
+    # ----------------------------------------------------
 
     return {
         "workout_id": str(workout_json["id"]),
@@ -247,7 +266,7 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         "calories_kcal": float(workout_json.get("calories"))
         if workout_json.get("calories")
         else None,
-        "c2_workout_type": workout_json.get("workout", {}).get("type"),
+        "c2_workout_type": workout_data.get("type"), # Use safe dict
         "erg_type": erg_type,
         "stroke_rate": float(workout_json.get("stroke_rate"))
         if workout_json.get("stroke_rate")
@@ -261,7 +280,7 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         "ranked": workout_json.get("ranked", False),
         "verified": workout_json.get("verified", False),
         "notes" : workout_json.get("comments", ""),
-        "has_splits": bool(workout_json.get("workout", {}).get("splits")),
+        "has_splits": bool(workout_data.get("splits")), # Use safe dict
         "has_strokes": workout_json.get("stroke_data", False),
         "ingest_time_utc": datetime.now(timezone.utc),
         "ingest_run_id": ingest_run_id,
@@ -278,7 +297,11 @@ def process_splits(
 
     rows = []
     for i, split in enumerate(splits_json, start=1):
-        hr_data = split.get("heart_rate", {})
+        # --- FIX for 'list' object has no attribute 'get' ---
+        hr_data = split.get("heart_rate")
+        if not isinstance(hr_data, dict):
+            hr_data = {}
+        # ----------------------------------------------------
         rows.append(
             {
                 "workout_id": workout_id,
@@ -327,30 +350,38 @@ def process_strokes(
     The 'p' field is polymorphic:
     - Rower/Ski: 'p' = pace in deciseconds / 500m (same as 't' field)
     - Bike:      'p' = power in deci-watts (watts * 10)
+    
+    Empty lists in the stroke data mark split boundaries for structured workouts.
     """
     if not strokes_json:
         return pd.DataFrame()
 
     rows = []
-    
     processed_erg_type = erg_type.strip().lower()
+    
+    current_split = 1
+    stroke_counter = 0
 
-    for i, stroke in enumerate(strokes_json, start=1):
+    for stroke in strokes_json:
+        # Empty lists mark split boundaries in FixedTimeSplits workouts
+        if not isinstance(stroke, dict):
+            if isinstance(stroke, list) and len(stroke) == 0:
+                current_split += 1
+            continue
+        
+        stroke_counter += 1
+        
         p_field = stroke.get("p")
         watts_val = None
         pace_val_cs = None
 
         if processed_erg_type == "bike":
-            # For bike, 'p' is deci-watts (watts * 10)
             watts_val = float(p_field) / 10.0 if p_field is not None else 0.0
-            pace_val_cs = None  # Pace is not provided
+            pace_val_cs = None
         else:
-            # For rower/ski, 'p' is centiseconds/500m
             pace_val_cs = int(p_field) if p_field is not None else None
-            # Calculate watts from pace
             if pace_val_cs is not None and pace_val_cs > 0:
-                # Rower formula: Watts = 2.80 / (pace_in_seconds_per_meter)^3
-                pace_sec_per_meter = float(pace_val_cs) / 5000.0  # Deciseconds, not centiseconds
+                pace_sec_per_meter = float(pace_val_cs) / 5000.0
                 watts_val = 2.80 / (pace_sec_per_meter**3)
             else:
                 watts_val = 0.0
@@ -362,8 +393,9 @@ def process_strokes(
             {
                 "workout_id": workout_id,
                 "workout_start_utc": workout_start_utc,
-                "stroke_number": i,
-                "time_cumulative_s": stroke["t"] / 10.0, # Decisecond fix
+                "split_number": current_split,  # NEW
+                "stroke_number": stroke_counter,
+                "time_cumulative_s": stroke["t"] / 10.0,
                 "distance_cumulative_m": int(stroke["d"]),
                 "pace_500m_cs": pace_val_cs,
                 "watts": watts_val,
@@ -393,7 +425,14 @@ def ingest_workout(
 
     splits_df = pd.DataFrame()
     if workout_record["has_splits"]:
-        splits_json = workout_json.get("workout", {}).get("splits", [])
+        # --- FIX for 'list' object has no attribute 'get' ---
+        workout_data = workout_json.get("workout")
+        if isinstance(workout_data, dict):
+            splits_json = workout_data.get("splits", [])
+        else:
+            splits_json = [] # Default to empty list if workout_data is not a dict
+        # ----------------------------------------------------
+        
         if splits_json:
             splits_df = process_splits(
                 workout_id, workout_start_utc, splits_json, ingest_run_id
@@ -461,6 +500,8 @@ def ingest_workouts_by_date(
     last_log_time = time.time()
     log.info(f"Fetching stroke data for {total_workouts_to_process} workouts...")
 
+# (Inside ingest_workouts_by_date)
+    
     for workout_json in workouts_json:
         try:
             wdf, sdf, tdf = ingest_workout(
@@ -476,9 +517,28 @@ def ingest_workouts_by_date(
             strokes_processed_count += len(tdf)
 
         except Exception as e:
-            log.error(f"Failed to process workout {workout_json.get('id')}: {e}")
+            # --- NEW DEBUGGING BLOCK ---
+            # This block safely logs the original error and dumps the problematic data,
+            # even if workout_json is not a dictionary.
+            
+            workout_id = "UNKNOWN (data is not a dict)"
+            if isinstance(workout_json, dict):
+                workout_id = workout_json.get('id', 'UNKNOWN (id key missing)')
+
+            log.error(f"--- FAILED TO PROCESS WORKOUT (ID: {workout_id}) ---")
+            log.error(f"ORIGINAL ERROR: {e}")
+            try:
+                # Dump the problematic data structure, whatever it is
+                log.error(f"DUMPING PROBLEMATIC DATA: {json.dumps(workout_json, indent=2)}")
+            except Exception as json_e:
+                log.error(f"Could not dump data (it might not be JSON serializable): {json_e}")
+            
             continue # Still process other workouts
+            # --- END DEBUGGING BLOCK ---
         
+        # Check if it's time to log progress ---
+        # (Your existing progress logging code follows)
+        current_time = time.time()        
         # Check if it's time to log progress ---
         current_time = time.time()
         if (current_time - last_log_time) >= 30.0:
@@ -586,7 +646,7 @@ def ingest_workouts_by_date(
                 strokes_combined,
                 CARDIO_STROKES_PATH,
                 primary_key=["workout_id", "stroke_number", "source"],
-                partition_cols=["date", "source"],
+                partition_cols=["date", "source"], # <-- REMOVED LEAKED THOUGHT
                 schema=get_schema("cardio_strokes"),
             )
             counts["strokes"] = len(strokes_combined)

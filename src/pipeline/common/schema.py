@@ -236,6 +236,7 @@ cardio_strokes_schema = pa.schema([
     pa.field("workout_start_utc", pa.timestamp("us", tz="UTC"), nullable=False),  # For partitioning
     
     # Stroke data
+    pa.field("split_number", pa.int32(), nullable=True),
     pa.field("stroke_number", pa.int32(), nullable=False),
     pa.field("time_cumulative_s", pa.float64(), nullable=False),
     pa.field("distance_cumulative_m", pa.int32(), nullable=False),
