@@ -156,14 +156,14 @@ workouts_schema = pa.schema([
     pa.field("timezone", pa.string(), nullable=True),
     pa.field("tz_source", pa.string(), nullable=True),  # 'actual' or 'assumed'
     
-    pa.field("duration_s", pa.int64(), nullable=True),
+    pa.field("duration_s", pa.float64(), nullable=True),
     pa.field("device_id", pa.string(), nullable=True),
     pa.field("notes", pa.string(), nullable=True),
     
     # Cardio fields
     pa.field("distance_m", pa.float64(), nullable=True),
     pa.field("avg_hr_bpm", pa.float64(), nullable=True),
-    pa.field("max__hr_bpm", pa.float64(), nullable=True),
+    pa.field("max_hr_bpm", pa.float64(), nullable=True),
     pa.field("min_hr_bpm", pa.float64(), nullable=True),
     pa.field("calories_kcal", pa.float64(), nullable=True),
     pa.field("avg_pace_sec_per_500m", pa.float64(), nullable=True),
@@ -205,7 +205,7 @@ cardio_splits_schema = pa.schema([
     
     # Split data
     pa.field("split_number", pa.int32(), nullable=False),
-    pa.field("split_time_s", pa.int32(), nullable=True),
+    pa.field("split_time_s", pa.float64(), nullable=True),
     pa.field("split_distance_m", pa.int32(), nullable=True),
     pa.field("calories_total", pa.int32(), nullable=True),
     pa.field("stroke_rate", pa.float64(), nullable=True),
@@ -237,12 +237,12 @@ cardio_strokes_schema = pa.schema([
     
     # Stroke data
     pa.field("stroke_number", pa.int32(), nullable=False),
-    pa.field("time_cumulative_s", pa.int32(), nullable=False),
+    pa.field("time_cumulative_s", pa.float64(), nullable=False),
     pa.field("distance_cumulative_m", pa.int32(), nullable=False),
     pa.field("pace_500m_cs", pa.int32(), nullable=True),  # Centiseconds per 500m
     pa.field("heart_rate_bpm", pa.int32(), nullable=True),
     pa.field("stroke_rate_spm", pa.int32(), nullable=True),  # Strokes per minute
-    
+    pa.field("watts", pa.float64(), nullable=True), 
     # Lineage
     pa.field("source", pa.string(), nullable=False),  # Always 'Concept2'
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),

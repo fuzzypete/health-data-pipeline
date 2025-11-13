@@ -206,12 +206,15 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
 
     end_utc = None
     end_local = None
-    if "time" in workout_json:
-        duration_s = workout_json["time"]
-        end_utc = start_utc + pd.Timedelta(seconds=duration_s)
-        end_local = start_local + pd.Timedelta(seconds=duration_s)
+    duration_in_seconds = None # Initialize
+    if workout_json.get("time") is not None:
+        duration_in_deciseconds = workout_json.get("time")
+        duration_in_seconds = duration_in_deciseconds / 10.0
+        end_utc = start_utc + pd.Timedelta(seconds=duration_in_seconds)
+        end_local = start_local + pd.Timedelta(seconds=duration_in_seconds)
 
-    erg_type = workout_json.get("type", "rower")
+    # --- FIX: Add strip() and lower() for robustness ---
+    erg_type = workout_json.get("type", "rower").strip().lower()
     workout_type = ERG_TYPE_MAP.get(erg_type, "Rowing")
 
     hr_data = workout_json.get("heart_rate", {})
@@ -226,7 +229,7 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         "end_time_local": end_local,
         "timezone": tz,
         "tz_source": "actual",
-        "duration_s": workout_json.get("time"),
+        "duration_s": duration_in_seconds, # Use the calculated seconds
         "distance_m": float(workout_json["distance"])
         if "distance" in workout_json
         else None,
@@ -256,7 +259,6 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         "ingest_run_id": ingest_run_id,
     }
 
-
 def process_splits(
     workout_id: str,
     workout_start_utc: pd.Timestamp,
@@ -274,7 +276,7 @@ def process_splits(
                 "workout_id": workout_id,
                 "workout_start_utc": workout_start_utc,
                 "split_number": i,
-                "split_time_s": int(split.get("time")) if split.get("time") else None,
+                "split_time_s": int(split.get("time")) / 10.0 if split.get("time") else None,
                 "split_distance_m": int(split.get("distance"))
                 if split.get("distance")
                 else None,
@@ -304,20 +306,52 @@ def process_splits(
     return df
 
 
+# In src/pipeline/ingest/concept2_api.py
+
 def process_strokes(
     workout_id: str,
     workout_start_utc: pd.Timestamp,
     strokes_json: list[dict],
     ingest_run_id: str,
+    erg_type: str = "rower"
 ) -> pd.DataFrame:
+    """
+    Process the stroke-level data for a workout.
+    
+    The 'p' field is polymorphic:
+    - Rower/Ski: 'p' = pace in centiseconds / 500m
+    - Bike:      'p' = power in deci-watts (watts * 10)
+    """
     if not strokes_json:
         return pd.DataFrame()
 
     rows = []
+    
+    # --- DEBUG LOGGING ---
+    processed_erg_type = erg_type.strip().lower()
+    log.info(f"Processing strokes for workout {workout_id} with erg_type: '{processed_erg_type}'")
+    # --- END LOGGING ---
+
     for i, stroke in enumerate(strokes_json, start=1):
-        # --- THIS IS THE FIX ---
-        # Get the values. They can be 0 or None.
-        pace = stroke.get("p")
+        p_field = stroke.get("p")
+        watts_val = None
+        pace_val_cs = None
+
+        if processed_erg_type == "bike":
+            # For bike, 'p' is deci-watts (watts * 10)
+            watts_val = float(p_field) / 10.0 if p_field is not None else 0.0
+            pace_val_cs = None  # Pace is not provided
+        else:
+            # For rower/ski, 'p' is centiseconds/500m
+            pace_val_cs = int(p_field) if p_field is not None else None
+            # Calculate watts from pace
+            if pace_val_cs is not None and pace_val_cs > 0:
+                # Rower formula: Watts = 2.80 / (pace_in_seconds_per_meter)^3
+                pace_sec_per_meter = float(pace_val_cs) / 50000.0
+                watts_val = 2.80 / (pace_sec_per_meter**3)
+            else:
+                watts_val = 0.0
+
         hr = stroke.get("hr")
         spm = stroke.get("spm")
 
@@ -326,20 +360,21 @@ def process_strokes(
                 "workout_id": workout_id,
                 "workout_start_utc": workout_start_utc,
                 "stroke_number": i,
-                "time_cumulative_s": int(stroke["t"]),
+                "time_cumulative_s": stroke["t"] / 10.0, # Decisecond fix
                 "distance_cumulative_m": int(stroke["d"]),
-                # Explicitly check for None, so that 0 is preserved
-                "pace_500m_cs": int(pace) if pace is not None else None,
+                "pace_500m_cs": pace_val_cs,
+                "watts": watts_val,
                 "heart_rate_bpm": int(hr) if hr is not None else None,
                 "stroke_rate_spm": int(spm) if spm is not None else None,
             }
         )
-        # --- END FIX ---
+
+    if not rows:
+        return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    df = add_lineage_fields(df, source="Concept2", ingest_run_id=ingest_run_id)
+    df = add_lineage_fields(df, source="Concept2", ingest_run_id=ingest_run_id) 
     return df
-
 
 def ingest_workout(
     client: Concept2Client,
@@ -365,12 +400,19 @@ def ingest_workout(
     if fetch_strokes and workout_record["has_strokes"]:
         strokes_json = client.get_workout_strokes(workout_id)
         if strokes_json:
+            # --- THIS IS THE FIX ---
+            # Get the (now cleaned) erg_type from the summary record
+            erg_type = workout_record.get("erg_type", "rower")
             strokes_df = process_strokes(
-                workout_id, workout_start_utc, strokes_json, ingest_run_id
+                workout_id,
+                workout_start_utc,
+                strokes_json,
+                ingest_run_id,
+                erg_type  # Pass the new erg_type argument
             )
+            # --- END FIX ---
 
     return workouts_df, splits_df, strokes_df
-
 
 def ingest_workouts_by_date(
     from_date: str,
