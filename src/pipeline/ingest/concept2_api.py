@@ -210,8 +210,16 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
     if workout_json.get("time") is not None:
         duration_in_deciseconds = workout_json.get("time")
         duration_in_seconds = duration_in_deciseconds / 10.0
-        end_utc = start_utc + pd.Timedelta(seconds=duration_in_seconds)
-        end_local = start_local + pd.Timedelta(seconds=duration_in_seconds)
+        
+        # --- TIMESTAMP FIX ---
+        # Calculate end times and round to microseconds to prevent "ArrowInvalid"
+        # errors caused by nanosecond-level floating point noise.
+        end_utc_raw = start_utc + pd.Timedelta(seconds=duration_in_seconds)
+        end_local_raw = start_local + pd.Timedelta(seconds=duration_in_seconds)
+        
+        end_utc = end_utc_raw.round("us")
+        end_local = end_local_raw.round("us")
+        # --- END FIX ---
 
     # --- FIX: Add strip() and lower() for robustness ---
     erg_type = workout_json.get("type", "rower").strip().lower()
@@ -306,8 +314,6 @@ def process_splits(
     return df
 
 
-# In src/pipeline/ingest/concept2_api.py
-
 def process_strokes(
     workout_id: str,
     workout_start_utc: pd.Timestamp,
@@ -327,10 +333,7 @@ def process_strokes(
 
     rows = []
     
-    # --- DEBUG LOGGING ---
     processed_erg_type = erg_type.strip().lower()
-    log.info(f"Processing strokes for workout {workout_id} with erg_type: '{processed_erg_type}'")
-    # --- END LOGGING ---
 
     for i, stroke in enumerate(strokes_json, start=1):
         p_field = stroke.get("p")
@@ -446,9 +449,17 @@ def ingest_workouts_by_date(
         log.info("No workouts to ingest")
         return {"workouts": 0, "splits": 0, "strokes": 0}
 
+
     all_workouts: list[pd.DataFrame] = []
     all_splits: list[pd.DataFrame] = []
     all_strokes: list[pd.DataFrame] = []
+
+    # Progress logging setup ---
+    total_workouts_to_process = len(workouts_json)
+    workouts_processed_count = 0
+    strokes_processed_count = 0
+    last_log_time = time.time()
+    log.info(f"Fetching stroke data for {total_workouts_to_process} workouts...")
 
     for workout_json in workouts_json:
         try:
@@ -460,9 +471,27 @@ def ingest_workouts_by_date(
                 all_splits.append(sdf)
             if not tdf.empty:
                 all_strokes.append(tdf)
+                
+            workouts_processed_count += 1
+            strokes_processed_count += len(tdf)
+
         except Exception as e:
             log.error(f"Failed to process workout {workout_json.get('id')}: {e}")
-            continue
+            continue # Still process other workouts
+        
+        # Check if it's time to log progress ---
+        current_time = time.time()
+        if (current_time - last_log_time) >= 30.0:
+            log.info(
+                f"Progress: Processed {workouts_processed_count}/{total_workouts_to_process} workouts "
+                f"({strokes_processed_count:,} total strokes)"
+            )
+            last_log_time = current_time
+
+    log.info(
+        f"Stroke processing complete. Processed {workouts_processed_count}/{total_workouts_to_process} workouts "
+        f"({strokes_processed_count:,} total strokes)."
+    )
 
     counts = {"workouts": 0, "splits": 0, "strokes": 0, 'lactate': 0}
 
