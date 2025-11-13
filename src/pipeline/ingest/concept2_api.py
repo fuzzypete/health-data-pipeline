@@ -319,7 +319,7 @@ def process_strokes(
     Process the stroke-level data for a workout.
     
     The 'p' field is polymorphic:
-    - Rower/Ski: 'p' = pace in centiseconds / 500m
+    - Rower/Ski: 'p' = pace in deciseconds / 500m (same as 't' field)
     - Bike:      'p' = power in deci-watts (watts * 10)
     """
     if not strokes_json:
@@ -347,7 +347,7 @@ def process_strokes(
             # Calculate watts from pace
             if pace_val_cs is not None and pace_val_cs > 0:
                 # Rower formula: Watts = 2.80 / (pace_in_seconds_per_meter)^3
-                pace_sec_per_meter = float(pace_val_cs) / 50000.0
+                pace_sec_per_meter = float(pace_val_cs) / 5000.0  # Deciseconds, not centiseconds
                 watts_val = 2.80 / (pace_sec_per_meter**3)
             else:
                 watts_val = 0.0
