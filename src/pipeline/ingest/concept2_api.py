@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
-import json  # Added for debugging
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
@@ -192,18 +192,8 @@ class Concept2Client:
             List of stroke dicts or None if not available
         """
         try:
-            # In get_workout_strokes method, add after line 195:
             response = self._request('GET', f'/users/me/results/{workout_id}/strokes')
-            strokes_data = response.get('data', [])
-
-            # Debug log the structure
-            if strokes_data and workout_type == "FixedTimeSplits":
-                log.info(f"FixedTimeSplits strokes structure: {type(strokes_data)}")
-                if strokes_data:
-                    log.info(f"First element type: {type(strokes_data[0])}")
-                    log.info(f"First element: {json.dumps(strokes_data[0], indent=2)}")
-
-            return strokes_data
+            return response.get('data', [])
         except Exception as e:
             log.warning(f"Could not fetch strokes for workout {workout_id}: {e}")
             return None
@@ -222,21 +212,17 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         duration_in_deciseconds = workout_json.get("time")
         duration_in_seconds = duration_in_deciseconds / 10.0
         
-        # --- TIMESTAMP FIX ---
-        # Calculate end times and round to microseconds to prevent "ArrowInvalid"
+        # Calculate end times and round to microseconds to prevent ArrowInvalid
         # errors caused by nanosecond-level floating point noise.
         end_utc_raw = start_utc + pd.Timedelta(seconds=duration_in_seconds)
         end_local_raw = start_local + pd.Timedelta(seconds=duration_in_seconds)
         
         end_utc = end_utc_raw.round("us")
         end_local = end_local_raw.round("us")
-        # --- END FIX ---
 
-    # --- FIX: Add strip() and lower() for robustness ---
     erg_type = workout_json.get("type", "rower").strip().lower()
     workout_type = ERG_TYPE_MAP.get(erg_type, "Rowing")
 
-    # --- FIX for 'list' object has no attribute 'get' ---
     hr_data = workout_json.get("heart_rate")
     if not isinstance(hr_data, dict):
         hr_data = {}
@@ -297,11 +283,10 @@ def process_splits(
 
     rows = []
     for i, split in enumerate(splits_json, start=1):
-        # --- FIX for 'list' object has no attribute 'get' ---
         hr_data = split.get("heart_rate")
         if not isinstance(hr_data, dict):
             hr_data = {}
-        # ----------------------------------------------------
+            
         rows.append(
             {
                 "workout_id": workout_id,
@@ -393,7 +378,7 @@ def process_strokes(
             {
                 "workout_id": workout_id,
                 "workout_start_utc": workout_start_utc,
-                "split_number": current_split,  # NEW
+                "split_number": current_split,
                 "stroke_number": stroke_counter,
                 "time_cumulative_s": stroke["t"] / 10.0,
                 "distance_cumulative_m": int(stroke["d"]),
@@ -425,13 +410,11 @@ def ingest_workout(
 
     splits_df = pd.DataFrame()
     if workout_record["has_splits"]:
-        # --- FIX for 'list' object has no attribute 'get' ---
         workout_data = workout_json.get("workout")
         if isinstance(workout_data, dict):
             splits_json = workout_data.get("splits", [])
         else:
-            splits_json = [] # Default to empty list if workout_data is not a dict
-        # ----------------------------------------------------
+            splits_json = []
         
         if splits_json:
             splits_df = process_splits(
@@ -442,17 +425,14 @@ def ingest_workout(
     if fetch_strokes and workout_record["has_strokes"]:
         strokes_json = client.get_workout_strokes(workout_id)
         if strokes_json:
-            # --- THIS IS THE FIX ---
-            # Get the (now cleaned) erg_type from the summary record
             erg_type = workout_record.get("erg_type", "rower")
             strokes_df = process_strokes(
                 workout_id,
                 workout_start_utc,
                 strokes_json,
                 ingest_run_id,
-                erg_type  # Pass the new erg_type argument
+                erg_type
             )
-            # --- END FIX ---
 
     return workouts_df, splits_df, strokes_df
 
@@ -517,10 +497,6 @@ def ingest_workouts_by_date(
             strokes_processed_count += len(tdf)
 
         except Exception as e:
-            # --- NEW DEBUGGING BLOCK ---
-            # This block safely logs the original error and dumps the problematic data,
-            # even if workout_json is not a dictionary.
-            
             workout_id = "UNKNOWN (data is not a dict)"
             if isinstance(workout_json, dict):
                 workout_id = workout_json.get('id', 'UNKNOWN (id key missing)')
@@ -528,13 +504,11 @@ def ingest_workouts_by_date(
             log.error(f"--- FAILED TO PROCESS WORKOUT (ID: {workout_id}) ---")
             log.error(f"ORIGINAL ERROR: {e}")
             try:
-                # Dump the problematic data structure, whatever it is
                 log.error(f"DUMPING PROBLEMATIC DATA: {json.dumps(workout_json, indent=2)}")
             except Exception as json_e:
                 log.error(f"Could not dump data (it might not be JSON serializable): {json_e}")
             
-            continue # Still process other workouts
-            # --- END DEBUGGING BLOCK ---
+            continue
         
         # Check if it's time to log progress ---
         # (Your existing progress logging code follows)
