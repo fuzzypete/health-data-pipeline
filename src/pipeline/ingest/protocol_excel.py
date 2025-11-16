@@ -88,9 +88,10 @@ def process_protocols(
     rename_map = {
         "date": "start_date",
         "category": "compound_type",
-        "dose": "dosage",
+        "dose_per_admin": "dosage",
         "units": "dosage_unit",
-        # 'compound_name', 'frequency', 'notes' are already correct
+        "frequency_pattern": "frequency",
+        # 'compound_name' and 'notes' already match
     }
     df = df.rename(columns=rename_map)
     # --- END FIX ---

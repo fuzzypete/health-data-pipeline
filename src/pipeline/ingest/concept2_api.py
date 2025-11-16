@@ -357,19 +357,25 @@ def process_strokes(
         stroke_counter += 1
         
         p_field = stroke.get("p")
-        watts_val = None
+        watts_val = 0.0
         pace_val_cs = None
 
-        if processed_erg_type == "bike":
-            watts_val = float(p_field) / 10.0 if p_field is not None else 0.0
-            pace_val_cs = None
+        # Empirically, for both rower/ski and bike in your data, "p" behaves like
+        # pace in deciseconds per 500m, and Concept2's "Watts" column is derived
+        # using the standard 2.8 / (pace/500)^3 relationship.
+
+        if p_field is not None:
+            try:
+                pace_val_cs = int(p_field)  # centiseconds per 500m (deciseconds * 10)
+            except (TypeError, ValueError):
+                pace_val_cs = None
+
+        if pace_val_cs is not None and pace_val_cs > 0:
+            pace_seconds = pace_val_cs / 10.0         # deciseconds → seconds per 500m
+            pace_sec_per_meter = pace_seconds / 500.0
+            watts_val = 2.80 / (pace_sec_per_meter ** 3)
         else:
-            pace_val_cs = int(p_field) if p_field is not None else None
-            if pace_val_cs is not None and pace_val_cs > 0:
-                pace_sec_per_meter = float(pace_val_cs) / 5000.0
-                watts_val = 2.80 / (pace_sec_per_meter**3)
-            else:
-                watts_val = 0.0
+            watts_val = 0.0
 
         hr = stroke.get("hr")
         spm = stroke.get("spm")
