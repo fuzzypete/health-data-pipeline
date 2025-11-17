@@ -162,6 +162,12 @@ def main():
     out["total_sleep_duration_s"] = base_df.get("total_sleep_duration")
     out["time_in_bed_s"] = base_df.get("time_in_bed")
 
+    # Sleep stage durations (seconds)
+    out["deep_sleep_duration_s"] = base_df.get("deep_sleep_duration")
+    out["light_sleep_duration_s"] = base_df.get("light_sleep_duration")
+    out["rem_sleep_duration_s"] = base_df.get("rem_sleep_duration")
+    out["awake_time_s"] = base_df.get("awake_time")
+
     # --- Readiness Metrics ---
     # Extract from nested readiness object in sleep endpoint
     if "readiness" in base_df.columns:

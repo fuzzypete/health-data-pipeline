@@ -392,6 +392,10 @@ oura_summary_schema = pa.schema([
     pa.field("sleep_contributors", pa.map_(pa.string(), pa.int8()), nullable=True),
     pa.field("total_sleep_duration_s", pa.int32(), nullable=True),
     pa.field("time_in_bed_s", pa.int32(), nullable=True),
+    pa.field("deep_sleep_duration_s", pa.int32(), nullable=True),
+    pa.field("light_sleep_duration_s", pa.int32(), nullable=True),
+    pa.field("rem_sleep_duration_s", pa.int32(), nullable=True),
+    pa.field("awake_time_s", pa.int32(), nullable=True),
 
     # --- Readiness Metrics ---
     pa.field("readiness_score", pa.int8(), nullable=True),
