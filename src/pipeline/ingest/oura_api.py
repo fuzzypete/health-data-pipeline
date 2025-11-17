@@ -1,4 +1,26 @@
-# [File: src/pipeline/ingest/oura_api.py]
+# src/pipeline/ingest/oura_api.py
+"""
+Oura API Client - Fetches sleep measurements and scores from Oura Ring API v2
+
+This module handles:
+1. OAuth token management (refresh when expired)
+2. Data fetching from Oura API
+3. Saving raw JSON responses to Raw/Oura/ directories
+
+Fetched endpoints:
+- sleep: ALL sleep measurements including:
+  * Sleep durations (total, REM, deep, light, awake)
+  * Heart rate (average, lowest during sleep = resting baseline)
+  * HRV (average during sleep)
+  * Temperature deviation (embedded in readiness object)
+  * Readiness score
+  * Timestamps and sleep stages
+
+- daily_sleep: Sleep score and contributors
+  * Sleep score (0-100)
+  * Contributor scores showing what drove the score
+  * Complements raw measurements with Oura's validated scoring algorithm
+"""
 import os
 import requests
 import json
@@ -6,10 +28,7 @@ from datetime import date, timedelta
 from ..paths import (
     OURA_TOKENS_FILE_PATH,
     RAW_OURA_SLEEP_DIR,
-    RAW_OURA_ACTIVITY_DIR,
-    RAW_OURA_READINESS_DIR
 )
-# Use config for secrets, not dotenv
 from ..common.config import get_oura_client_id, get_oura_client_secret
 
 # Get credentials from central config
@@ -21,9 +40,8 @@ API_BASE_URL = "https://api.ouraring.com/v2/usercollection"
 
 # Define the data we want to fetch and where to save it
 DATA_ENDPOINTS = {
-    "daily_sleep": RAW_OURA_SLEEP_DIR,
-    "daily_activity": RAW_OURA_ACTIVITY_DIR,
-    "daily_readiness": RAW_OURA_READINESS_DIR,
+    "sleep": RAW_OURA_SLEEP_DIR,        # All measurements + embedded readiness
+    "daily_sleep": RAW_OURA_SLEEP_DIR,  # Sleep score + contributors
 }
 
 class OuraAPIClient:
@@ -31,7 +49,7 @@ class OuraAPIClient:
     Client to handle Oura V2 API authentication, token refreshing,
     and data fetching.
     """
-    def __init__(self, token_file=OURA_TOKENS_FILE_PATH): # Use standard path
+    def __init__(self, token_file=OURA_TOKENS_FILE_PATH):
         self.token_file = token_file
         self.tokens = self._load_tokens()
         self._ensure_directories()
@@ -39,12 +57,11 @@ class OuraAPIClient:
     def _ensure_directories(self):
         """Make sure the raw data directories exist."""
         for path in DATA_ENDPOINTS.values():
-            # Use the Path object's mkdir method
             path.mkdir(parents=True, exist_ok=True)
 
     def _load_tokens(self):
         """Load tokens from the JSON file."""
-        if not self.token_file.exists(): # Use Path.exists()
+        if not self.token_file.exists():
             raise FileNotFoundError(
                 f"Token file not found at {self.token_file}. "
                 "Please run `poetry run python scripts/setup_oura.py` first."
@@ -79,7 +96,7 @@ class OuraAPIClient:
             
             self.tokens = response.json()  # Save new tokens
             self._save_tokens()
-            print("Successfully refreshed Oura tokens.")
+            print("✅ Successfully refreshed Oura tokens.")
             return self.tokens["access_token"]
 
         except requests.exceptions.RequestException as e:
@@ -127,54 +144,47 @@ class OuraAPIClient:
                 # Oura may return data day by day in the 'data' list
                 items = data.get("data", [])
                 if not items:
-                    print(f"No new data found for {endpoint}.")
+                    print(f"  No new data found for {endpoint}.")
                     continue
 
                 for item in items:
                     day = item.get("day")
                     if not day:
-                        print(f"Skipping item with no day: {item}")
+                        print(f"  ⚠️  Skipping item with no day: {item}")
                         continue
-                        
+                    
+                    # Use endpoint name in filename to distinguish sleep from daily_sleep
                     filename = f"oura_{endpoint}_{day}.json"
-                    # Use Path object to join path and write
                     filepath = save_dir / filename
                     with open(filepath, 'w') as f:
                         json.dump(item, f, indent=4)
                 
-                print(f"Successfully saved {len(items)} items for {endpoint} to {save_dir}")
+                print(f"  ✅ Saved {len(items)} items for {endpoint}")
                 
             except requests.exceptions.RequestException as e:
-                print(f"❌ Error fetching {endpoint}: {e}")
-                if e.response:
-                    print(f"Response: {e.response.text}")
+                print(f"  ❌ Error fetching {endpoint}: {e}")
+                if hasattr(e, 'response') and e.response:
+                    print(f"  Response: {e.response.text}")
 
 def fetch_oura_data(start_date=None):
     """
     Main function to fetch Oura data for a specified start_date.
-    Relies on START_DATE from Makefile.
+    If no start_date is provided, fetches the last 7 days.
     """
-    try:
-        client = OuraAPIClient()
-    except FileNotFoundError as e:
-        print(e)
-        print("Please run `poetry run python scripts/setup_oura.py` first.")
-        return
+    if start_date is None:
+        start_date = date.today() - timedelta(days=7)
+    elif isinstance(start_date, str):
+        # Parse string to date
+        from datetime import datetime
+        start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
 
-    if start_date:
-        start = date.fromisoformat(start_date)
-        print(f"Using provided start date: {start.isoformat()}")
-    else:
-        # Default: 3 days back if no start_date is provided (e.g., manual run)
-        start = date.today() - timedelta(days=3)
-        print(f"No start_date provided. Defaulting to 3 days ago: {start.isoformat()}")
+    end_date = date.today()
+    
+    client = OuraAPIClient()
+    client.fetch_data_by_date(
+        start_date.strftime("%Y-%m-%d"),
+        end_date.strftime("%Y-%m-%d")
+    )
 
-    end = date.today()
-
-    if start > end:
-        print(f"Start date {start.isoformat()} is after end date {end.isoformat()}. Nothing to fetch.")
-        return
-
-    client.fetch_data_by_date(start.isoformat(), end.isoformat())
-
-    print(f"--- Oura fetch complete for range {start.isoformat()} to {end.isoformat()} ---")
+if __name__ == "__main__":
+    fetch_oura_data()
