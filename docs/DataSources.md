@@ -1,5 +1,9 @@
 # Data Sources
 
+> **NOTE: This document may be stale. Always defer to `schema.py` and ingest code as the source of truth.**
+
+
+
 **Version:** 2.3  
 **Last Updated:** 2025-11-10
 
@@ -148,52 +152,27 @@ Used for filtering and volume analysis by muscle group.
 ## Oura Ring
 
 ### Source Details
-- **Format:** JSON from Oura API v2
-- **Authentication:** Personal Access Token (6-month expiry)
-- **Frequency:** Daily automated sync
-- **Granularity:** Daily summaries + 5-min HR intervals
-- **Timezone:** Full offsets → Strategy B
+- **Format:** JSON from Oura API v2 (`sleep`, `daily_sleep`)
+- **Authentication:** OAuth2 client ID/secret + refresh token (`Data/oura_tokens.json`)
+- **Frequency:** Daily sync via `make fetch-oura`
+- **Granularity:** Daily per `day`. (No intraday HR yet.)
+- **Timezone:** Oura-provided local dates
 
-### Tables Created
-- `oura_readiness_daily` - Recovery/readiness scores
-- `oura_sleep_daily` - Sleep quality and stages
-- `oura_activity_daily` - Movement and calories
-- `oura_heart_rate_5min` - Continuous HR throughout day
+### Table Created
+- `oura_summary` — merged daily measurements + scores:
+  - Sleep durations: total, deep, light, REM, awake
+  - Sleep score + contributor map
+  - Readiness score + contributors + temperature deviation
+  - Resting HR (lowest_heart_rate) and HRV (average_hrv)
+  - Activity fields present but currently NULL until endpoint added
 
-### Ingestion Process
-```bash
-make ingest-oura
-```
+### Endpoints Used
+- `/v2/usercollection/sleep` — full durations, HR, HRV, readiness block
+- `/v2/usercollection/daily_sleep` — sleep score + contributors
 
-**Steps:**
-1. Authenticate with Personal Access Token
-2. Fetch from endpoints:
-   - `/v2/usercollection/daily_readiness`
-   - `/v2/usercollection/daily_sleep`
-   - `/v2/usercollection/daily_activity`
-   - `/v2/usercollection/heartrate`
-3. Parse daily summaries and 5-min HR data
-4. Write to `silver/oura/{table}/{year}/{month}.parquet`
-
-### Authentication Setup
-```bash
-# Get PAT from Oura Cloud
-export OURA_PAT="your_token_here"
-# Save to config.yml
-```
-
-### Temperature Tracking
-Oura provides multiple temperature metrics:
-- `temperature_deviation_celsius` - Deviation from baseline
-- `temperature_trend_deviation` - Recent trend
-- Sleep-specific temperature delta
-
-All stored for correlation with illness, training load, protocols.
-
-### Data Quality
-- Unique by `date` for daily summaries
-- Unique by `timestamp_utc` for 5-min HR
-- Scores: 0-100 range validation
+### Ingestion
+- Raw JSON saved under `Data/Raw/Oura/sleep/oura_{endpoint}_{day}.json`
+- `make ingest-oura` merges and writes `oura_summary` parquet
 
 ---
 

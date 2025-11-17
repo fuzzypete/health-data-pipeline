@@ -1,5 +1,7 @@
 # Schema
 
+> **NOTE:** This document may be stale. Always defer to `src/pipeline/common/schema.py` as the source of truth.
+
 **Version:** 2.3  
 **Last Updated:** 2025-11-10
 
@@ -288,89 +290,44 @@ Exercise classification reference table.
 
 ---
 
-## Oura Ring
+## Oura Summary Schema
 
-All Oura tables use **Strategy B** timezone handling.
-
-### oura_readiness_daily
-Daily readiness/recovery scores.
+Daily Oura integration is stored in a single `oura_summary` table.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| date | DATE | Summary date |
-| score | INT | Readiness score (0-100) |
-| temperature_deviation_celsius | FLOAT | Deviation from baseline |
-| temperature_trend_deviation | FLOAT | Trend vs recent baseline |
-| recovery_index | INT | Recovery score component |
-| hrv_balance | INT | HRV balance score |
-| previous_night_score | INT | Sleep quality factor |
-| sleep_balance_score | INT | Sleep consistency factor |
-| activity_balance_score | INT | Activity consistency factor |
-| ingestion_id | UUID | Foreign key to ingestion_log |
+| day | DATE | Local summary date from Oura (one row per day). |
+| activity_score | INT | Oura activity score (0–100). Currently NULL until `daily_activity` endpoint is wired. |
+| activity_contributors | MAP<STRING,INT> | Activity contributor name → score map. Currently NULL. |
+| active_calories_kcal | INT | Active calories burned. Currently NULL. |
+| total_calories_kcal | INT | Total calories (resting + active). Currently NULL. |
+| steps | INT | Daily step count. Currently NULL. |
+| equivalent_walking_distance_m | INT | Equivalent walking distance (meters). Currently NULL. |
+| high_activity_time_s | INT | High-intensity activity time (seconds). Currently NULL. |
+| medium_activity_time_s | INT | Medium-intensity activity time (seconds). Currently NULL. |
+| low_activity_time_s | INT | Low-intensity activity time (seconds). Currently NULL. |
+| sedentary_time_s | INT | Sedentary time (seconds). Currently NULL. |
+| non_wear_time_s | INT | Estimated non-wear time (seconds). Currently NULL. |
+| sleep_score | INT | Sleep score 0–100 from `daily_sleep` endpoint. |
+| sleep_contributors | MAP<STRING,INT> | Sleep contributor name → score map (deep_sleep, efficiency, etc.). |
+| total_sleep_duration_s | INT | Total sleep duration (seconds) from `sleep` endpoint. |
+| time_in_bed_s | INT | Time in bed (seconds) from `sleep` endpoint. |
+| deep_sleep_duration_s | INT | Deep sleep duration (seconds) from `sleep`. |
+| light_sleep_duration_s | INT | Light sleep duration (seconds) from `sleep`. |
+| rem_sleep_duration_s | INT | REM sleep duration (seconds) from `sleep`. |
+| awake_time_s | INT | Awake time during the night (seconds) from `sleep`. |
+| readiness_score | INT | Readiness score 0–100 from embedded readiness block in `sleep`. |
+| readiness_contributors | MAP<STRING,INT> | Readiness contributor name → score map. |
+| temperature_deviation_c | FLOAT | Nightly temperature deviation vs baseline (°C). |
+| resting_heart_rate_bpm | INT | Lowest heart rate during sleep (true resting HR). |
+| hrv_ms | INT | Average HRV during sleep (milliseconds). |
+| source | STRING | Ingestion source label (e.g., `Oura`). |
+| ingest_time_utc | TIMESTAMP | Ingestion timestamp (UTC). |
+| ingest_run_id | STRING | Optional ingestion run identifier. |
+| date | STRING | Hive partition key derived from `day` (`YYYY-MM-DD`). |
 
-**Primary Key:** date  
+**Primary Key:** day  
 **Partitioning:** `year/month`
-
-### oura_sleep_daily
-Sleep quality and stages.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| date | DATE | Sleep night date |
-| score | INT | Sleep score (0-100) |
-| total_sleep_duration_seconds | INT | Total sleep time |
-| time_in_bed_seconds | INT | Time in bed |
-| efficiency_percentage | FLOAT | Sleep efficiency |
-| onset_latency_seconds | INT | Time to fall asleep |
-| deep_sleep_duration_seconds | INT | Deep sleep time |
-| light_sleep_duration_seconds | INT | Light sleep time |
-| rem_sleep_duration_seconds | INT | REM sleep time |
-| awake_duration_seconds | INT | Wake time during night |
-| restlessness_percentage | FLOAT | Movement during sleep |
-| average_heart_rate_bpm | INT | Average HR during sleep |
-| lowest_heart_rate_bpm | INT | Lowest HR during sleep |
-| average_hrv_ms | FLOAT | Average HRV during sleep |
-| temperature_delta_celsius | FLOAT | Temperature deviation |
-
-**Primary Key:** date  
-**Partitioning:** `year/month`
-
-### oura_activity_daily
-Daily movement and activity.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| date | DATE | Activity date |
-| score | INT | Activity score (0-100) |
-| active_calories_kcal | INT | Active calories burned |
-| total_calories_kcal | INT | Total daily calories |
-| steps | INT | Step count |
-| equivalent_walking_distance_meters | INT | Movement distance |
-| high_activity_minutes | INT | High-intensity minutes |
-| medium_activity_minutes | INT | Medium-intensity minutes |
-| low_activity_minutes | INT | Low-intensity minutes |
-| sedentary_minutes | INT | Sedentary time |
-| average_met | FLOAT | Average metabolic equivalent |
-| inactivity_alerts | INT | Inactivity notification count |
-| target_calories_kcal | INT | Calorie goal |
-| target_meters | INT | Distance goal |
-
-**Primary Key:** date  
-**Partitioning:** `year/month`
-
-### oura_heart_rate_5min
-5-minute interval heart rate throughout day.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| timestamp_utc | TIMESTAMP | Measurement time (UTC) |
-| heart_rate_bpm | INT | Heart rate |
-| source | STRING | sleep \| awake \| workout \| rest |
-
-**Primary Key:** timestamp_utc  
-**Partitioning:** `year/month`
-
----
 
 ## Laboratory Results
 
