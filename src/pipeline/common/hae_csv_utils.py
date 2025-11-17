@@ -243,7 +243,8 @@ def _log_daily_summary_written(daily_tbl: pa.Table) -> None:
         sample = pdf.sort_values("date_utc").iloc[-1]
         fields = []
         for k in ["steps", "active_energy_kcal", "energy_total_kcal",
-                  "sleep_minutes_asleep", "sleep_efficiency_pct", "water_fl_oz"]:
+                  "sleep_minutes_asleep", "sleep_efficiency_pct", "water_fl_oz",
+                  "diet_calories_kcal", "protein_g", "carbs_g", "total_fat_g"]:
             if k in pdf.columns and pd.notna(sample.get(k)):
                 val = sample[k]
                 if isinstance(val, float):
@@ -253,7 +254,6 @@ def _log_daily_summary_written(daily_tbl: pa.Table) -> None:
         log.info("daily_summary: rows=%d, dates=%s..%s, sample={%s}", n, dmin, dmax, metrics_str)
     except Exception as e:
         log.warning("daily_summary: summary failed: %s", e)
-
 
 def _process_minute_facts(df: pd.DataFrame, source_value: str, ingest_run_id: str) -> None:
     """
