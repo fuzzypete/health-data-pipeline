@@ -34,6 +34,7 @@ minute_facts_base = pa.schema([
 
     # --- NEW METRICS FROM HAE AUTOMATION ---
     pa.field("apple_exercise_time_min", pa.int32(), nullable=True),
+    pa.field("alcohol_consumption_count", pa.float64(), nullable=True),
     pa.field("sleeping_wrist_temp_degf", pa.float64(), nullable=True),
     pa.field("blood_glucose_mg_dl", pa.float64(), nullable=True),
     pa.field("blood_oxygen_saturation_pct", pa.float64(), nullable=True),

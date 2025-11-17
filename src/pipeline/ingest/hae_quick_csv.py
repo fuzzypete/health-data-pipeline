@@ -45,6 +45,7 @@ RENAME_MAP_AUTOMATION = {
     # Automation names -> Canonical Schema names
     'Apple Exercise Time (min)': 'apple_exercise_time_min',
     'Apple Sleeping Wrist Temperature (degF)': 'sleeping_wrist_temp_degf',
+    'Alcohol Consumption (count)': 'alcohol_consumption_count',
     'Blood Glucose (mg/dL)': 'blood_glucose_mg_dl',
     'Blood Oxygen Saturation (%)': 'blood_oxygen_saturation_pct',
     'Blood Pressure [Diastolic] (mmHg)': 'blood_pressure_diastolic_mmhg',
