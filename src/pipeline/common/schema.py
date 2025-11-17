@@ -40,7 +40,7 @@ minute_facts_base = pa.schema([
     pa.field("blood_pressure_diastolic_mmhg", pa.float64(), nullable=True),
     pa.field("blood_pressure_systolic_mmhg", pa.float64(), nullable=True),
     pa.field("body_mass_index_count", pa.float64(), nullable=True),
-    pa.field("carbohydrates_g", pa.float64(), nullable=True),
+    pa.field("carbs_g", pa.float64(), nullable=True),
     pa.field("cardio_recovery_count_min", pa.float64(), nullable=True),
     pa.field("cycling_distance_mi", pa.float64(), nullable=True),
     pa.field("calories_kcal", pa.float64(), nullable=True), # 'Dietary Energy (kcal)'
@@ -98,7 +98,6 @@ daily_summary_schema = pa.schema([
     pa.field("steps", pa.int32(), nullable=True),
     pa.field("active_energy_kcal", pa.float64(), nullable=True),
     pa.field("basal_energy_kcal", pa.float64(), nullable=True),
-    pa.field("calories_kcal", pa.float64(), nullable=True),
     pa.field("distance_mi", pa.float64(), nullable=True),
     pa.field("flights_climbed", pa.int32(), nullable=True),
     
@@ -118,9 +117,10 @@ daily_summary_schema = pa.schema([
     pa.field("temperature_degF", pa.float64(), nullable=True),
     
     # Nutrition
+    pa.field("diet_calories_kcal", pa.float64(), nullable=True),
     pa.field("protein_g", pa.float64(), nullable=True),
     pa.field("carbs_g", pa.float64(), nullable=True),
-    pa.field("fat_g", pa.float64(), nullable=True),
+    pa.field("total_fat_g", pa.float64(), nullable=True),
     pa.field("water_fl_oz", pa.int32(), nullable=True),
     
     # Derived (guarded)

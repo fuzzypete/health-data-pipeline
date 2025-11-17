@@ -55,11 +55,11 @@ def _coerce_metric_types(df: pd.DataFrame) -> pd.DataFrame:
     ]
                 
     float_cols = [
-        "active_energy_kcal", "basal_energy_kcal", "calories_kcal",
+        "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
         "distance_mi", "sleep_score", "weight_lb", "body_fat_pct", "temperature_degF",
         "sleeping_wrist_temp_degf", "blood_glucose_mg_dl", "blood_oxygen_saturation_pct",
         "blood_pressure_diastolic_mmhg", "blood_pressure_systolic_mmhg",
-        "body_mass_index_count", "carbohydrates_g", "cardio_recovery_count_min",
+        "body_mass_index_count", "carbs_g", "cardio_recovery_count_min",
         "cycling_distance_mi", "fiber_g", "hrv_ms", "heart_rate_avg",
         "heart_rate_max", "heart_rate_min", "lean_body_mass_lb",
         "physical_effort_kcal_hr_kg", "protein_g", "respiratory_rate_count_min",
@@ -112,7 +112,7 @@ def _build_daily_summary(
 
     daily_pick_cols = [
         "steps", "distance_mi", "flights_climbed",
-        "active_energy_kcal", "basal_energy_kcal", "calories_kcal",
+        "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
         "sleep_minutes_asleep", "sleep_minutes_in_bed", "sleep_score",
         "weight_lb", "body_fat_pct", "temperature_degF",
         "resting_hr_bpm", "hrv_ms", "respiratory_rate_count_min", # Note: 'respiratory_rate_bpm' in schema
@@ -141,7 +141,7 @@ def _build_daily_summary(
     for c in daily_pick_cols:
         if c not in df.columns: continue
         if c in {"steps", "flights_climbed", "distance_mi",
-                "active_energy_kcal", "basal_energy_kcal", "calories_kcal",
+                "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
                 "sleep_minutes_asleep", "sleep_minutes_in_bed",
                 "protein_g", "carbs_g", "fat_g"}:
             agg_map[c] = safe_max
@@ -177,7 +177,7 @@ def _build_daily_summary(
         denom = out["sleep_minutes_in_bed"].replace({0: np.nan})
         out["sleep_efficiency_pct"] = (out["sleep_minutes_asleep"] / denom * 100).round(1)
     if {"calories_kcal", "energy_total_kcal"}.issubset(out.columns):
-        out["net_energy_kcal"] = (out["calories_kcal"] - out["energy_total_kcal"]).round(0)
+        out["net_energy_kcal"] = (out["diet_calories_kcal"] - out["energy_total_kcal"]).round(0)
 
     out = add_lineage_fields(out, source_value, ingest_run_id)
     metric_cols = [c for c in out.columns if c not in {"date_utc", "source", "ingest_time_utc", "ingest_run_id"}]

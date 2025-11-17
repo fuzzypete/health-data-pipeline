@@ -50,7 +50,7 @@ RENAME_MAP_AUTOMATION = {
     'Blood Pressure [Diastolic] (mmHg)': 'blood_pressure_diastolic_mmhg',
     'Blood Pressure [Systolic] (mmHg)': 'blood_pressure_systolic_mmhg',
     'Body Mass Index (count)': 'body_mass_index_count',
-    'Carbohydrates (g)': 'carbohydrates_g',
+    'Carbohydrates (g)': 'carbs_g',
     'Cardio Recovery (count/min)': 'cardio_recovery_count_min',
     'Cycling Distance (mi)': 'cycling_distance_mi',
     'Fiber (g)': 'fiber_g',
@@ -76,7 +76,7 @@ RENAME_MAP_AUTOMATION = {
     'Steps (count)': 'steps',
     'Distance (mi)': 'distance_mi',
     'Flights Climbed (count)': 'flights_climbed',
-    'Dietary Energy (kcal)': 'calories_kcal',
+    'Dietary Energy (kcal)': 'diet_calories_kcal',
     'Body Fat Percentage (%)': 'body_fat_pct',
     'Body Temperature (degF)': 'temperature_degF',
 
