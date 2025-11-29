@@ -193,6 +193,41 @@ check-parquet:
 	@echo "Checking Parquet table status..."
 	@$(PYTHON) scripts/check_parquet_status.py
 
+.PHONY: weekly
+
+weekly:
+	@echo "=================================================================="
+	@echo "📅 STARTING WEEKLY INGESTION"
+	@echo "   - Scope: Non-quick HAE, Labs, Protocols (Supps)"
+	@echo "   - Lookback: 7 days for Oura & Concept2"
+	@echo "=================================================================="
+	
+	@# 1. Non-Quick HAE (Daily Metrics + Workouts)
+	@echo "--- [1/5] HAE Daily (Non-Quick) ---"
+	@$(MAKE) fetch-hae-daily
+	@$(MAKE) ingest-hae
+	@$(MAKE) ingest-hae-workouts
+
+	@# 2. Labs
+	@echo "--- [2/5] Labs ---"
+	@$(MAKE) fetch-labs
+	@$(MAKE) ingest-labs
+
+	@# 3. Supps (Protocols)
+	@echo "--- [3/5] Protocols (Supplements) ---"
+	@$(MAKE) fetch-protocols
+	@$(MAKE) ingest-protocols
+
+	@# 4. Oura (Last 7 Days)
+	@echo "--- [4/5] Oura (7-day lookback) ---"
+	@$(MAKE) fetch-oura ingest-oura START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
+
+	@# 5. Concept2 (Last 7 Days)
+	@echo "--- [5/5] Concept2 (7-day lookback) ---"
+	@$(MAKE) ingest-concept2 START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
+
+	@echo "✅ Weekly ingest complete."
+	
 # ============================================================================
 # Google Drive Fetching (NEW UNIFIED SECTION)
 # ============================================================================
@@ -293,12 +328,6 @@ analysis.clean:
 	@rm -rf analysis/outputs/*.csv analysis/outputs/*.png analysis/outputs/*.html
 	@echo "✅ Analysis outputs cleaned"
 
-analysis.help:
-	@echo "Analysis targets:"
-	@echo "  analysis.hr      - Run recovery HR baseline analysis"
-	@echo "  analysis.z2      - Run Zone 2 power analysis"
-	@echo "  analysis.clean   - Clean generated outputs"
-
 # Interactive Analysis Targets
 # =============================================================================
 
@@ -332,12 +361,15 @@ analysis.kidney:
 		print('Saved to analysis/outputs/kidney_correlation_$$(date +%Y%m%d).html')"
 
 analysis.help:
+	@echo "Analysis targets:"
+	@echo "  analysis.hr      - Run recovery HR baseline analysis"
+	@echo "  analysis.z2      - Run Zone 2 power analysis"
+	@echo "  analysis.clean   - Clean generated outputs"
 	@echo "Interactive analysis targets:"
 	@echo "  dashboard        - Launch Streamlit interactive dashboard"
 	@echo "  correlations     - Open Plotly correlation explorer"
 	@echo "  analysis.iron    - Generate iron repletion correlation chart"
 	@echo "  analysis.kidney  - Generate HGH→kidney correlation chart"
-```
 
 # This allows you to run: make analysis.run SCRIPT=run_hr_analysis
 # ============================================================================

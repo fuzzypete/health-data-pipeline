@@ -472,7 +472,7 @@ def ingest_workouts_by_date(
 
     if not workouts_json:
         log.info("No workouts to ingest")
-        return {"workouts": 0, "splits": 0, "strokes": 0}
+        return {"workouts": 0, "splits": 0, "strokes": 0, "lactate": 0}
 
 
     all_workouts: list[pd.DataFrame] = []
