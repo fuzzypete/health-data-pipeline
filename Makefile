@@ -299,6 +299,45 @@ analysis.help:
 	@echo "  analysis.z2      - Run Zone 2 power analysis"
 	@echo "  analysis.clean   - Clean generated outputs"
 
+# Interactive Analysis Targets
+# =============================================================================
+
+.PHONY: dashboard correlations analysis.iron analysis.kidney
+
+dashboard:
+	@echo "🚀 Launching interactive dashboard..."
+	poetry run streamlit run analysis/apps/dashboard_interactive.py
+
+correlations:
+	@echo "📊 Opening correlation explorer..."
+	poetry run python analysis/scripts/correlations.py
+
+# Preset correlation analyses
+analysis.iron:
+	@echo "Running iron repletion correlation analysis..."
+	@poetry run python -c "from analysis.scripts.correlations import HealthDashboard; \
+		from datetime import datetime; \
+		d = HealthDashboard(datetime(2025, 10, 1), datetime.now()); \
+		fig = d.create_overlay_chart([('Ferritin', 'labs'), ('Iron', 'supplements'), ('Hemoglobin', 'labs'), ('Total Meters', 'training')]); \
+		fig.write_html('analysis/outputs/iron_correlation_$$(date +%Y%m%d).html'); \
+		print('Saved to analysis/outputs/iron_correlation_$$(date +%Y%m%d).html')"
+
+analysis.kidney:
+	@echo "Running HGH → kidney correlation analysis..."
+	@poetry run python -c "from analysis.scripts.correlations import HealthDashboard; \
+		from datetime import datetime; \
+		d = HealthDashboard(datetime(2024, 1, 1), datetime.now()); \
+		fig = d.create_overlay_chart([('Creatinine', 'labs'), ('eGFR', 'labs'), ('HGH', 'supplements')]); \
+		fig.write_html('analysis/outputs/kidney_correlation_$$(date +%Y%m%d).html'); \
+		print('Saved to analysis/outputs/kidney_correlation_$$(date +%Y%m%d).html')"
+
+analysis.help:
+	@echo "Interactive analysis targets:"
+	@echo "  dashboard        - Launch Streamlit interactive dashboard"
+	@echo "  correlations     - Open Plotly correlation explorer"
+	@echo "  analysis.iron    - Generate iron repletion correlation chart"
+	@echo "  analysis.kidney  - Generate HGH→kidney correlation chart"
+```
 
 # This allows you to run: make analysis.run SCRIPT=run_hr_analysis
 # ============================================================================
