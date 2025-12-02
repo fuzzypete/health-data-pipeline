@@ -227,7 +227,7 @@ weekly:
 	@$(MAKE) ingest-concept2 START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
 
 	@echo "✅ Weekly ingest complete."
-	
+
 # ============================================================================
 # Google Drive Fetching (NEW UNIFIED SECTION)
 # ============================================================================
@@ -344,22 +344,12 @@ correlations:
 # Preset correlation analyses
 analysis.iron:
 	@echo "Running iron repletion correlation analysis..."
-	@poetry run python -c "from analysis.scripts.correlations import HealthDashboard; \
-		from datetime import datetime; \
-		d = HealthDashboard(datetime(2025, 10, 1), datetime.now()); \
-		fig = d.create_overlay_chart([('Ferritin', 'labs'), ('Iron', 'supplements'), ('Hemoglobin', 'labs'), ('Total Meters', 'training')]); \
-		fig.write_html('analysis/outputs/iron_correlation_$$(date +%Y%m%d).html'); \
-		print('Saved to analysis/outputs/iron_correlation_$$(date +%Y%m%d).html')"
+	@poetry run python analysis/scripts/correlations.py --analysis iron
 
 analysis.kidney:
 	@echo "Running HGH → kidney correlation analysis..."
-	@poetry run python -c "from analysis.scripts.correlations import HealthDashboard; \
-		from datetime import datetime; \
-		d = HealthDashboard(datetime(2024, 1, 1), datetime.now()); \
-		fig = d.create_overlay_chart([('Creatinine', 'labs'), ('eGFR', 'labs'), ('HGH', 'supplements')]); \
-		fig.write_html('analysis/outputs/kidney_correlation_$$(date +%Y%m%d).html'); \
-		print('Saved to analysis/outputs/kidney_correlation_$$(date +%Y%m%d).html')"
-
+	@poetry run python analysis/scripts/correlations.py --analysis kidney
+	
 analysis.help:
 	@echo "Analysis targets:"
 	@echo "  analysis.hr      - Run recovery HR baseline analysis"
