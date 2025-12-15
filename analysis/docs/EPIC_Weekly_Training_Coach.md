@@ -186,66 +186,72 @@ ORDER BY volume DESC;
 
 ### Analysis Dependencies (A-Series)
 
-#### A1: Progression Rate Calculator 🟡 CORE LOGIC
-**Status:** 🔴 Blocked - needs implementation  
-**Priority:** P0  
-**Effort:** 2-3 hours  
-**Blockers:** D1 (need JEFIT data)
+#### A1: Progression Rate Calculator ✅ COMPLETE
+**Status:** 🟢 Implemented
+**Priority:** P0
+**Effort:** 2-3 hours
+**Blockers:** None
 
 **Tasks:**
-- [ ] Define progression algorithm (linear? exponential?)
-- [ ] Calculate per-lift progression rates (last 4, 8, 12 weeks)
-- [ ] Identify stagnant lifts (no progress in 4+ weeks)
-- [ ] Calculate recommended next targets
-- [ ] Include safety bounds (max 5-10lb increase, conservative)
+- [x] Define progression algorithm (rule-based with safety bounds)
+- [x] Calculate per-lift progression rates (last 4, 8, 12 weeks)
+- [x] Identify stagnant lifts (no progress in 4+ sessions)
+- [x] Calculate recommended next targets
+- [x] Include safety bounds (max +5lb increase, conservative)
 
-**Key Logic:**
-```python
-def calculate_progression(lift_history_df, conservative=True):
-    """
-    Recommend next workout target based on history.
-    
-    Rules:
-    - If last 3 sessions successful: +5-10 lbs
-    - If last session failed: maintain weight
-    - If stagnant >4 weeks: reduce weight 10%, rebuild
-    - Conservative mode: lower increases, more caution
-    """
-    pass  # Implementation
+**Implementation:** `analysis/scripts/calculate_progression.py`
+
+**Usage:**
+```bash
+make progression                              # Default: 12 weeks
+python analysis/scripts/calculate_progression.py --weeks 8
+python analysis/scripts/calculate_progression.py --exercise "Dumbbell Bench Press"
 ```
+
+**Output:** `analysis/outputs/progression_YYYYMMDD.csv`
+
+**Status Categories:**
+- 🟢 READY: 3+ sessions at weight, good reps → recommend +5 lbs
+- 📈 PROGRESSING: Recently changed weight, still adapting
+- 🟡 STAGNANT: 4+ sessions, no improvement
+- 🔴 DELOAD: Declining reps → recommend 10% reduction
+- ⚪ STABLE: Maintaining, not ready to progress
+
+**Validated:** Dec 14, 2025 - correctly identified 3 exercises ready to progress
 
 ---
 
-#### A2: Recovery-Based Volume Adjustment 🟡 CORE LOGIC
-**Status:** 🔴 Blocked - needs implementation  
-**Priority:** P0  
-**Effort:** 2 hours  
-**Blockers:** D2 (Oura), D3 (sleep debt), D4 (volume)
+#### A2: Recovery-Based Volume Adjustment ✅ COMPLETE
+**Status:** 🟢 Implemented
+**Priority:** P0
+**Effort:** 2 hours
+**Blockers:** None
 
 **Tasks:**
-- [ ] Define recovery state thresholds (Good/Moderate/Poor)
-- [ ] Map recovery state → training mode (Optimal/Maintenance/Deload)
-- [ ] Create volume adjustment rules per mode
-- [ ] Validate against known high/low stress periods
+- [x] Define recovery state thresholds (Good/Moderate/Poor)
+- [x] Map recovery state → training mode (Optimal/Maintenance/Deload)
+- [x] Create volume adjustment rules per mode
+- [x] Integrate with A1 progression recommendations
 
-**Key Logic:**
-```python
-def determine_training_mode(recovery_score, sleep_debt, recent_volume):
-    """
-    Assign weekly training mode based on recovery.
-    
-    Modes:
-    - OPTIMAL: High recovery, low sleep debt → progressive overload
-    - MAINTENANCE: Moderate recovery → maintain strength
-    - DELOAD: Poor recovery, high sleep debt → reduce volume 40%
-    
-    Returns:
-        mode: str
-        volume_adjustment: float (multiplier, e.g. 0.6 = 60% volume)
-        session_frequency: int (sessions/week)
-    """
-    pass  # Implementation
+**Implementation:** `analysis/scripts/calculate_training_mode.py`
+
+**Usage:**
+```bash
+make training.plan                    # Full pipeline: sleep → progression → plan
+python analysis/scripts/calculate_training_mode.py
+python analysis/scripts/calculate_training_mode.py --force-mode OPTIMAL
 ```
+
+**Output:** `analysis/outputs/training_plan_YYYYMMDD.csv`
+
+**Training Modes:**
+| Mode | Volume | Intensity | Sessions | Progression |
+|------|--------|-----------|----------|-------------|
+| 🟢 OPTIMAL | 100% | Follow A1 recs | 4/week | Yes |
+| 🟡 MAINTENANCE | 80% | Maintain weights | 3/week | No |
+| 🔴 DELOAD | 60% | -10% weights | 2/week | No |
+
+**Validated:** Dec 14, 2025 - correctly triggered DELOAD mode for 7.2hr sleep debt
 
 ---
 
@@ -410,31 +416,29 @@ def determine_training_mode(recovery_score, sleep_debt, recent_volume):
 
 ## Next Immediate Action
 
-**🎉 Sprint 1 COMPLETE + D3 Built**
+**🎉 Sprint 2 COMPLETE - Core Algorithms Done**
 
-**Status:** All data dependencies complete
+**Status:** All core algorithms implemented
 - D1: JEFIT Data ✅
 - D2: Oura Recovery Data ✅
-- D3: Sleep Debt Calculator ✅ (implemented Dec 14, 2025)
+- D3: Sleep Debt Calculator ✅
 - D4: Training Volume Data ✅
+- A1: Progression Rate Calculator ✅
+- A2: Recovery-Based Volume Adjustment ✅
 
-**Current:** 7.1hr sleep debt, POOR recovery state - proceed with caution on training load recommendations.
+**Quick Command:** `make training.plan`
 
-**Ready for Sprint 2: Core Algorithms**
+**Current State:** DELOAD mode triggered (7.2hr sleep debt)
 
-**Next up: A1 - Progression Rate Calculator**
+**Next up: A3 - Weekly Report Generator**
 - Effort: 2-3 hours
-- Core algorithm for weekly recommendations
-- Analyzes exercise progression trajectories
-- Uses JEFIT data to recommend next workout targets
-
-**After A1: A2 - Recovery-Based Volume Adjustment**
-- Integrates D3 sleep debt with training recommendations
-- Maps recovery state → training mode (Optimal/Maintenance/Deload)
+- Combines A1 + A2 into polished weekly report
+- Markdown output with motivational context
+- Ready to use every Sunday
 
 ---
 
 **Last Updated:** Dec 14, 2025
-**Sprint:** 2 of 4 - Core Algorithms (starting)
-**Time Invested:** ~2.5 hours
-**Next Task:** A1 Progression Rate Calculator (2-3 hours)
+**Sprint:** 2 of 4 - Core Algorithms ✅ COMPLETE
+**Time Invested:** ~5.5 hours
+**Next Task:** A3 Weekly Report Generator (2-3 hours)

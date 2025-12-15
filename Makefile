@@ -397,11 +397,21 @@ duck.query:
 # Analysis Scripts
 # ============================================================================
 
-.PHONY: sleep.metrics
+.PHONY: sleep.metrics progression training.plan
 
 sleep.metrics:
 	@echo "--- Calculating sleep metrics ---"
 	$(PYTHON) analysis/scripts/calculate_sleep_metrics.py
+
+progression:
+	@echo "--- Analyzing strength progression ---"
+	$(PYTHON) analysis/scripts/calculate_progression.py
+
+training.plan:
+	@echo "--- Generating recovery-adjusted training plan ---"
+	@$(MAKE) sleep.metrics
+	@$(MAKE) progression
+	$(PYTHON) analysis/scripts/calculate_training_mode.py
 
 # ============================================================================
 # Utilities
