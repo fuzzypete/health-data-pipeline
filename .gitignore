@@ -43,3 +43,5 @@ analysis/outputs/*
 # Jupyter checkpoints
 analysis/notebooks/.ipynb_checkpoints/
 *.ipynb_checkpoints/
+
+.claude
