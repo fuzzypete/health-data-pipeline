@@ -247,7 +247,7 @@ def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
         if "distance" in workout_json
         else None,
         "avg_hr_bpm": float(hr_data.get("average")) if hr_data.get("average") else None,
-        "max_hr_bpm": float(hr_data.get("maximum")) if hr_data.get("maximum") else None,
+        "max_hr_bpm": float(hr_data.get("max")) if hr_data.get("max") else None,
         "min_hr_bpm": float(hr_data.get("minimum")) if hr_data.get("minimum") else None,
         "calories_kcal": float(workout_json.get("calories"))
         if workout_json.get("calories")
@@ -308,8 +308,8 @@ def process_splits(
                 "min_hr_bpm": float(hr_data.get("minimum"))
                 if hr_data.get("minimum")
                 else None,
-                "max_hr_bpm": float(hr_data.get("maximum"))
-                if hr_data.get("maximum")
+                "max_hr_bpm": float(hr_data.get("max"))
+                if hr_data.get("max")
                 else None,
                 "ending_hr_bpm": float(hr_data.get("ending"))
                 if hr_data.get("ending")
@@ -331,31 +331,57 @@ def process_strokes(
 ) -> pd.DataFrame:
     """
     Process the stroke-level data for a workout.
-    
+
     The 'p' field is polymorphic:
     - Rower/Ski: 'p' = pace in deciseconds / 500m (same as 't' field)
     - Bike:      'p' = power in deci-watts (watts * 10)
-    
-    Empty lists in the stroke data mark split boundaries for structured workouts.
+
+    Interval boundaries are detected by:
+    1. Empty lists in the stroke data (explicit split markers)
+    2. Distance resets (when distance decreases, a new interval has started)
+
+    For interval workouts, each interval's strokes have local timestamps starting
+    at t=0. This function accumulates time offsets to produce correct cumulative
+    timestamps across the entire workout.
     """
     if not strokes_json:
         return pd.DataFrame()
 
     rows = []
     processed_erg_type = erg_type.strip().lower()
-    
+
     current_split = 1
     stroke_counter = 0
+
+    # Track state for detecting interval boundaries and accumulating time offsets
+    prev_distance = 0
+    prev_time_local = 0  # Last time value within current interval (deciseconds)
+    time_offset_ds = 0   # Cumulative time offset (deciseconds)
 
     for stroke in strokes_json:
         # Empty lists mark split boundaries in FixedTimeSplits workouts
         if not isinstance(stroke, dict):
             if isinstance(stroke, list) and len(stroke) == 0:
+                # Add the last interval's duration to the offset
+                time_offset_ds += prev_time_local
+                prev_time_local = 0
+                prev_distance = 0
                 current_split += 1
             continue
-        
+
+        current_distance = int(stroke["d"])
+        current_time_ds = stroke["t"]  # deciseconds
+
+        # Detect interval boundary by distance reset
+        # (distance decreases significantly = new interval started)
+        if current_distance < prev_distance - 10:  # 10m tolerance for noise
+            # Add the last interval's duration to the offset
+            time_offset_ds += prev_time_local
+            prev_time_local = 0
+            current_split += 1
+
         stroke_counter += 1
-        
+
         p_field = stroke.get("p")
         watts_val = 0.0
         pace_val_cs = None
@@ -380,20 +406,27 @@ def process_strokes(
         hr = stroke.get("hr")
         spm = stroke.get("spm")
 
+        # Calculate cumulative time by adding offset to local interval time
+        cumulative_time_ds = current_time_ds + time_offset_ds
+
         rows.append(
             {
                 "workout_id": workout_id,
                 "workout_start_utc": workout_start_utc,
                 "split_number": current_split,
                 "stroke_number": stroke_counter,
-                "time_cumulative_s": stroke["t"] / 10.0,
-                "distance_cumulative_m": int(stroke["d"]),
+                "time_cumulative_s": cumulative_time_ds / 10.0,
+                "distance_cumulative_m": current_distance,
                 "pace_500m_cs": pace_val_cs,
                 "watts": watts_val,
                 "heart_rate_bpm": int(hr) if hr is not None else None,
                 "stroke_rate_spm": int(spm) if spm is not None else None,
             }
         )
+
+        # Update tracking state
+        prev_distance = current_distance
+        prev_time_local = current_time_ds
 
     if not rows:
         return pd.DataFrame()
