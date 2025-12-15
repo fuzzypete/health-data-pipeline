@@ -255,18 +255,36 @@ python analysis/scripts/calculate_training_mode.py --force-mode OPTIMAL
 
 ---
 
-#### A3: Weekly Report Generator 🟡 OUTPUT FORMAT
-**Status:** 🔴 Blocked - needs implementation  
-**Priority:** P0  
-**Effort:** 2-3 hours  
-**Blockers:** A1 (progression), A2 (volume adjustment)
+#### A3: Weekly Report Generator ✅ COMPLETE
+**Status:** 🟢 Implemented
+**Priority:** P0
+**Effort:** 2-3 hours
+**Blockers:** None
 
 **Tasks:**
-- [ ] Design report format (see example in previous message)
-- [ ] Build markdown template
-- [ ] Populate with calculated targets
-- [ ] Add motivational context (progress, peak comparisons)
-- [ ] Include safety warnings and notes
+- [x] Design report format with all sections
+- [x] Build markdown template
+- [x] Populate with calculated targets
+- [x] Add motivational context (progress, peak comparisons)
+- [x] Include safety warnings and notes
+
+**Implementation:** `analysis/scripts/generate_weekly_report.py`
+
+**Usage:**
+```bash
+make training.weekly    # Full pipeline → markdown report
+```
+
+**Output:** `analysis/outputs/weekly_report_YYYYMMDD.md`
+
+**Report Sections:**
+- Training mode header with context
+- Recovery status table with warnings
+- Volume guidance (sets, sessions, intensity)
+- Exercise targets by category (Upper Push/Pull, Lower, Core)
+- Progress summary (ready/building/stagnant counts)
+- Suggested weekly schedule
+- Motivational close based on mode
 
 ---
 
@@ -416,29 +434,33 @@ python analysis/scripts/calculate_training_mode.py --force-mode OPTIMAL
 
 ## Next Immediate Action
 
-**🎉 Sprint 2 COMPLETE - Core Algorithms Done**
+**🎉 Sprint 3 COMPLETE - Weekly Report Ready**
 
-**Status:** All core algorithms implemented
+**Status:** Core functionality complete!
 - D1: JEFIT Data ✅
 - D2: Oura Recovery Data ✅
 - D3: Sleep Debt Calculator ✅
 - D4: Training Volume Data ✅
 - A1: Progression Rate Calculator ✅
 - A2: Recovery-Based Volume Adjustment ✅
+- A3: Weekly Report Generator ✅
 
-**Quick Command:** `make training.plan`
+**Quick Command:** `make training.weekly`
 
-**Current State:** DELOAD mode triggered (7.2hr sleep debt)
+**Current State:** DELOAD mode (7.1hr sleep debt) - report generated!
 
-**Next up: A3 - Weekly Report Generator**
-- Effort: 2-3 hours
-- Combines A1 + A2 into polished weekly report
-- Markdown output with motivational context
-- Ready to use every Sunday
+**Ready for Sprint 4: Automation & Polish**
+- Add Sunday reminder/automation
+- Error handling improvements
+- Documentation
+
+**Optional S-Series (lower priority):**
+- S1: Exercise categorization improvements
+- S2: Historical peak tracking enhancements
 
 ---
 
 **Last Updated:** Dec 14, 2025
-**Sprint:** 2 of 4 - Core Algorithms ✅ COMPLETE
-**Time Invested:** ~5.5 hours
-**Next Task:** A3 Weekly Report Generator (2-3 hours)
+**Sprint:** 3 of 4 - Report Generation ✅ COMPLETE
+**Time Invested:** ~7 hours
+**Status:** MVP COMPLETE - ready for weekly use!
