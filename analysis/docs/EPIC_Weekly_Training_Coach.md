@@ -105,49 +105,34 @@ ORDER BY last_performed DESC;
 
 ---
 
-#### D3: Sleep Debt Calculator 🟡 READY TO BUILD
-**Status:** 🟡 Unblocked - ready to implement  
-**Priority:** P1  
-**Effort:** 1 hour  
-**Blockers:** None (D2 complete)
+#### D3: Sleep Debt Calculator ✅ COMPLETE
+**Status:** 🟢 Implemented
+**Priority:** P1
+**Effort:** 1 hour
+**Blockers:** None
 
 **Tasks:**
-- [ ] Define sleep debt formula (baseline - actual, rolling 7-day)
-- [ ] Query sleep data from minute_facts
-- [ ] Create calculation function
-- [ ] Validate against known high/low sleep periods
+- [x] Define sleep debt formula (baseline - actual, rolling 7-day)
+- [x] Query sleep data from minute_facts
+- [x] Create calculation function
+- [x] Validate against known high/low sleep periods
 
-**Data Source:**
-```sql
--- Get daily sleep totals
-SELECT 
-    timestamp_utc::DATE as date,
-    MAX(sleep_total_hr) as total_sleep_hr
-FROM lake.minute_facts
-WHERE sleep_total_hr IS NOT NULL
-GROUP BY timestamp_utc::DATE
-ORDER BY date DESC;
+**Implementation:** `analysis/scripts/calculate_sleep_metrics.py`
+
+**Usage:**
+```bash
+make sleep.metrics                    # Default: 30 days, 7.5hr baseline
+python analysis/scripts/calculate_sleep_metrics.py --days 14 --baseline 8.0
 ```
 
-**Implementation:**
-```python
-def calculate_sleep_debt(sleep_df, baseline_hours=7.5):
-    """
-    Calculate rolling 7-day sleep debt.
-    
-    Args:
-        sleep_df: DataFrame with columns [date, total_sleep_hours]
-        baseline_hours: Personal sleep need baseline
-    
-    Returns:
-        DataFrame with sleep_debt column
-    """
-    sleep_df['daily_deficit'] = baseline_hours - sleep_df['total_sleep_hours']
-    sleep_df['sleep_debt_7d'] = sleep_df['daily_deficit'].rolling(7).sum()
-    return sleep_df
-```
+**Output:** `analysis/outputs/sleep_metrics_YYYYMMDD.csv`
 
-**Next:** Build as standalone script: `analysis/scripts/calculate_sleep_metrics.py`
+**Features:**
+- Rolling 7-day sleep debt calculation
+- Recovery state classification (OPTIMAL/MODERATE/POOR)
+- Sleep efficiency tracking
+- HRV integration for recovery assessment
+- Validated against Nov 2025 stress period (correctly flagged 17 POOR days)
 
 ---
 
@@ -425,41 +410,31 @@ def determine_training_mode(recovery_score, sleep_debt, recent_volume):
 
 ## Next Immediate Action
 
-**🎉 Sprint 1 COMPLETE - All Data Dependencies Met**
+**🎉 Sprint 1 COMPLETE + D3 Built**
 
-**Status:** 100% complete (4/4 dependencies validated)
-- D1: JEFIT Data ✅  
+**Status:** All data dependencies complete
+- D1: JEFIT Data ✅
 - D2: Oura Recovery Data ✅
-- D3: Sleep Data Source ✅ (identified, ready to build)
-- D4: Training Volume Data ✅ (validated Dec 6, 2025)
+- D3: Sleep Debt Calculator ✅ (implemented Dec 14, 2025)
+- D4: Training Volume Data ✅
+
+**Current:** 7.1hr sleep debt, POOR recovery state - proceed with caution on training load recommendations.
 
 **Ready for Sprint 2: Core Algorithms**
 
-**Options for next session:**
-
-**Option A: Build Sleep Debt Calculator (D3)**
-- Effort: 1 hour
-- Creates: `analysis/scripts/calculate_sleep_metrics.py`
-- Output: Rolling 7-day sleep debt calculation
-- Immediate value: Daily readiness input
-
-**Option B: Start Progression Rate Calculator (A1)**  
+**Next up: A1 - Progression Rate Calculator**
 - Effort: 2-3 hours
 - Core algorithm for weekly recommendations
 - Analyzes exercise progression trajectories
-- Higher complexity but higher value
+- Uses JEFIT data to recommend next workout targets
 
-**Option C: Build Both Calculators (D3 + Partial A1)**
-- Effort: 2-3 hours total
-- Get sleep metrics operational
-- Start progression logic
-- Most comprehensive progress
-
-**Recommendation:** Option A (D3 first) - gets you actionable sleep debt metrics within 1 hour, then tackle A1 in next session when you have 2-3 hours.
+**After A1: A2 - Recovery-Based Volume Adjustment**
+- Integrates D3 sleep debt with training recommendations
+- Maps recovery state → training mode (Optimal/Maintenance/Deload)
 
 ---
 
-**Last Updated:** Dec 6, 2025 (23:30 PST)  
-**Sprint:** 1 of 4 - Data Foundation ✅ COMPLETE
-**Time Invested:** ~1.5 hours  
-**Next Sprint:** Core Algorithms (A1-A2, 5-6 hours estimated)
+**Last Updated:** Dec 14, 2025
+**Sprint:** 2 of 4 - Core Algorithms (starting)
+**Time Invested:** ~2.5 hours
+**Next Task:** A1 Progression Rate Calculator (2-3 hours)

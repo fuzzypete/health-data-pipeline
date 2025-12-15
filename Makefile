@@ -13,20 +13,99 @@ MODULE_ROOT  := src.pipeline.ingest
 PARQUET_DIR  := Data/Parquet
 DUCKDB_FILE  ?= Data/duck/health.duckdb
 
-# --- New Date Variables ---
-START_DATE   ?= $(shell date -d '3 days ago' +%Y-%m-%d) # Default: 3 days ago
+# --- Date Variables ---
+# Default API lookback for 'make all' - reasonable window for catching up
+API_LOOKBACK_DAYS ?= 7
+START_DATE   ?= $(shell date -d '$(API_LOOKBACK_DAYS) days ago' +%Y-%m-%d)
 END_DATE     ?= $(shell date +%Y-%m-%d)
 REBUILD_START_DATE ?= $(shell date -d '5 years ago' +%Y-%m-%d)
 
-# Default ingestion targets for 'make all'
-# UPDATED to use 'fetch-daily' (fast) instead of 'fetch-all' (slow)
-INGEST_TARGETS ?= fetch-daily ingest-hae ingest-hae-quick ingest-hae-workouts ingest-concept2 ingest-oura ingest-jefit ingest-labs ingest-protocols
+# --- DuckDB Configuration ---
+PROJECT_ROOT     := $(shell pwd)
+PARQUET_ABS_PATH := $(PROJECT_ROOT)/$(PARQUET_DIR)
+SQL_TEMPLATE     := scripts/sql/create-views.sql.template
+SQL_RUN_FILE     := scripts/sql/.create_views_run.sql
+FETCH_SCRIPT     := scripts/fetch_drive_sources.py
+
+# ============================================================================
+# Help
+# ============================================================================
+
+.PHONY: help
+
+help:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "Health Data Pipeline - Makefile Targets"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "📊 Primary Workflows:"
+	@echo "  all              - Comprehensive ingestion ($(API_LOOKBACK_DAYS)-day API lookback)"
+	@echo "                     Fetches latest HAE, processes all local data, $(API_LOOKBACK_DAYS)-day APIs"
+	@echo "  weekly           - Weekly update: Non-quick HAE + Labs + Protocols + 7-day APIs"
+	@echo "  reload           - Drop all Parquet data + re-run 'all' (requires CONFIRM=1)"
+	@echo "  rebuild-history  - Nuclear option: Fetch ALL history + re-process everything"
+	@echo ""
+	@echo "🔧 Development:"
+	@echo "  install          - Install dependencies with Poetry"
+	@echo "  lock             - Update poetry.lock"
+	@echo "  lint             - Run ruff + black checks"
+	@echo "  fmt              - Format code with black"
+	@echo "  test             - Run pytest"
+	@echo "  validate         - Validate Parquet data lake integrity"
+	@echo "  dev-shell        - Open Poetry shell"
+	@echo ""
+	@echo "📥 Individual Ingestion (HAE):"
+	@echo "  ingest-hae              - Process HAE Automation CSVs (HealthMetrics-...)"
+	@echo "  ingest-hae-quick        - Process HAE Quick Export CSVs (HealthAutoExport-...)"
+	@echo "  ingest-hae-workouts     - Process HAE Workout JSON"
+	@echo ""
+	@echo "📥 Individual Ingestion (APIs):"
+	@echo "  ingest-concept2         - Ingest Concept2 (default: $(API_LOOKBACK_DAYS)-day lookback)"
+	@echo "  ingest-concept2-history - Ingest Concept2 history (5 years, no strokes)"
+	@echo "  ingest-oura             - Ingest Oura data (requires fetch-oura first)"
+	@echo "  fetch-oura              - Fetch Oura data (default: $(API_LOOKBACK_DAYS)-day lookback)"
+	@echo ""
+	@echo "📥 Individual Ingestion (Local):"
+	@echo "  ingest-jefit            - Ingest latest JEFIT CSV from Data/Raw/JEFIT/"
+	@echo "  ingest-jefit-file       - Ingest specific file: FILE=path/to/export.csv"
+	@echo "  ingest-labs             - Ingest Labs Excel → Parquet"
+	@echo "  ingest-protocols        - Ingest Protocols Excel → Parquet"
+	@echo ""
+	@echo "☁️  Google Drive Fetching:"
+	@echo "  fetch-daily             - Fetch daily HAE automated exports"
+	@echo "  fetch-all               - Fetch ALL sources from Google Drive"
+	@echo "  fetch-labs              - Fetch Labs Excel from Drive"
+	@echo "  fetch-protocols         - Fetch Protocols Excel from Drive"
+	@echo "  fetch-hae               - Fetch all HAE sources (daily + quick)"
+	@echo "  fetch-hae-daily         - Fetch daily HAE automated exports"
+	@echo "  fetch-hae-quick         - Fetch quick HAE manual exports"
+	@echo ""
+	@echo "🦆 DuckDB (Query Engine):"
+	@echo "  duck.init        - Initialize DuckDB database"
+	@echo "  duck.views       - Apply/refresh views from SQL"
+	@echo "  duck.query       - Run query: SQL=\"SELECT * FROM lake.labs\""
+	@echo ""
+	@echo "🛠️  Utilities:"
+	@echo "  check-parquet    - Check Parquet table status + row counts"
+	@echo "  backfill-lactate - Extract lactate from Concept2 comments"
+	@echo "  drop-parquet     - Delete $(PARQUET_DIR) (requires CONFIRM=1)"
+	@echo "  zipsrc           - Create source-only ZIP in ./tmp/"
+	@echo "  image            - Build Docker image (tag: hdp:dev)"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "Quick Start:"
+	@echo "  1. make install"
+	@echo "  2. Configure config.yaml and .env"
+	@echo "  3. make all                    # Comprehensive ingestion"
+	@echo "  4. make all API_LOOKBACK_DAYS=3   # Minimal daily update"
+	@echo "  5. make check-parquet          # Verify data loaded"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ============================================================================
 # Development Environment
 # ============================================================================
 
-.PHONY: help install lock lint fmt test validate image dev-shell
+.PHONY: install lock lint fmt test validate image dev-shell
 
 install:
 	poetry install --with dev
@@ -56,39 +135,155 @@ dev-shell:
 	poetry shell
 
 # ============================================================================
-# Data Ingestion
+# Primary Ingestion Workflows
+# ============================================================================
+
+.PHONY: all weekly reload rebuild-history
+
+all:
+	@echo "=================================================================="
+	@echo "📊 COMPREHENSIVE INGESTION ($(API_LOOKBACK_DAYS)-day API lookback)"
+	@echo "=================================================================="
+	
+	@# Fetch all HAE sources from Drive
+	@echo ""
+	@echo "--- [1/8] Fetching HAE from Drive ---"
+	@$(MAKE) fetch-hae-daily fetch-hae-quick
+	
+	@# Process all local HAE data
+	@echo ""
+	@echo "--- [2/8] HAE Daily (Automation) ---"
+	@$(MAKE) ingest-hae
+	
+	@echo ""
+	@echo "--- [3/8] HAE Quick (Manual) ---"
+	@$(MAKE) ingest-hae-quick
+	
+	@echo ""
+	@echo "--- [4/8] HAE Workouts ---"
+	@$(MAKE) ingest-hae-workouts
+	
+	@# API sources with lookback window
+	@echo ""
+	@echo "--- [5/8] Concept2 ($(API_LOOKBACK_DAYS)-day lookback) ---"
+	@$(MAKE) ingest-concept2 START_DATE=$(START_DATE)
+	
+	@echo ""
+	@echo "--- [6/8] Oura ($(API_LOOKBACK_DAYS)-day lookback) ---"
+	@$(MAKE) fetch-oura ingest-oura START_DATE=$(START_DATE)
+	
+	@# Local sources
+	@echo ""
+	@echo "--- [7/8] JEFIT ---"
+	@$(MAKE) ingest-jefit
+	
+	@echo ""
+	@echo "--- [8/8] Labs & Protocols ---"
+	@$(MAKE) fetch-labs ingest-labs fetch-protocols ingest-protocols
+	
+	@echo ""
+	@echo "✅ All ingestion completed ($(API_LOOKBACK_DAYS)-day window)."
+
+weekly:
+	@echo "=================================================================="
+	@echo "📅 WEEKLY INGESTION"
+	@echo "   - Scope: Non-quick HAE, Labs, Protocols (Supps)"
+	@echo "   - Lookback: 7 days for Oura & Concept2"
+	@echo "=================================================================="
+	
+	@# Non-Quick HAE (Daily Metrics + Workouts)
+	@echo ""
+	@echo "--- [1/5] HAE Daily (Non-Quick) ---"
+	@$(MAKE) fetch-hae-daily
+	@$(MAKE) ingest-hae
+	@$(MAKE) ingest-hae-workouts
+
+	@# Labs
+	@echo ""
+	@echo "--- [2/5] Labs ---"
+	@$(MAKE) fetch-labs
+	@$(MAKE) ingest-labs
+
+	@# Protocols
+	@echo ""
+	@echo "--- [3/5] Protocols (Supplements) ---"
+	@$(MAKE) fetch-protocols
+	@$(MAKE) ingest-protocols
+
+	@# Oura (Last 7 Days)
+	@echo ""
+	@echo "--- [4/5] Oura (7-day lookback) ---"
+	@$(MAKE) fetch-oura ingest-oura START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
+
+	@# Concept2 (Last 7 Days)
+	@echo ""
+	@echo "--- [5/5] Concept2 (7-day lookback) ---"
+	@$(MAKE) ingest-concept2 START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
+
+	@echo ""
+	@echo "✅ Weekly ingest complete."
+
+reload: drop-parquet all
+
+rebuild-history:
+	@echo "--- 1/7: Dropping entire Parquet data lake ---"
+	@$(MAKE) drop-parquet CONFIRM=1
+
+	@echo "--- 2/7: Unarchiving local raw files from Data/Archive ---"
+	@$(MAKE) unarchive
+
+	@echo "--- 3/7: Fetching ALL historical G-Drive sources (Labs, Protocols, HAE) ---"
+	@$(MAKE) fetch-all
+
+	@echo "--- 4/7: Fetching ALL historical API data (from 2020-01-01) ---"
+	@echo "Fetching Oura history..."
+	@$(MAKE) fetch-oura START_DATE=2020-01-01
+	@echo "Fetching Concept2 history..."
+	@$(MAKE) ingest-concept2-history REBUILD_START_DATE=2020-01-01
+
+	@echo "--- 5/7: Ingesting all fetched data into Parquet ---"
+	@$(MAKE) ingest-hae ingest-hae-quick ingest-hae-workouts
+	@$(MAKE) ingest-oura ingest-jefit ingest-labs ingest-protocols
+
+	@echo "--- 6/7: Rebuilding DuckDB views ---"
+	@$(MAKE) duck.views
+
+	@echo "--- 7/7: Validating rebuilt data lake ---"
+	@$(MAKE) validate
+	@echo ""
+	@echo "✅ --- Historical rebuild complete! ---"
+
+# ============================================================================
+# Individual Ingestion Targets
 # ============================================================================
 
 .PHONY: ingest-hae ingest-hae-quick ingest-hae-workouts 
 .PHONY: ingest-concept2 ingest-concept2-history
 .PHONY: fetch-oura ingest-oura ingest-jefit ingest-jefit-file test-jefit backfill-lactate
 .PHONY: ingest-labs ingest-protocols
-.PHONY: all reload show-ingest check-parquet
 
 # --- HAE (Apple Health Export) ---
 
 ingest-hae:
-	@echo "--- Ingesting HAE Automation CSV (HealthMetrics-...) ---"
+	@echo "Ingesting HAE Automation CSV (HealthMetrics-...)..."
 	$(PYTHON) -m $(MODULE_ROOT).hae_csv
 
 ingest-hae-quick:
-	@echo "--- Ingesting HAE Quick Export CSV (HealthAutoExport-...) ---"
+	@echo "Ingesting HAE Quick Export CSV (HealthAutoExport-...)..."
 	$(PYTHON) -m $(MODULE_ROOT).hae_quick_csv
 
 ingest-hae-workouts:
-	@echo "--- Ingesting HAE Workout JSON (Strategy B) ---"
+	@echo "Ingesting HAE Workout JSON (Strategy B)..."
 	$(PYTHON) -m $(MODULE_ROOT).hae_workouts
 
 # --- Concept2 (Rowing/Biking) ---
 
-# Default 3-day lookback
 ingest-concept2:
-	@echo "--- Ingesting Concept2 workouts from $(START_DATE) to $(END_DATE) ---"
+	@echo "Ingesting Concept2 workouts from $(START_DATE) to $(END_DATE)..."
 	$(PYTHON) -m $(MODULE_ROOT).concept2_api --from-date $(START_DATE) --to-date $(END_DATE)
 
-# 5-year lookback for rebuilds
 ingest-concept2-history:
-	@echo "--- Ingesting Concept2 HISTORY from $(REBUILD_START_DATE) to $(END_DATE) ---"
+	@echo "Ingesting Concept2 HISTORY from $(REBUILD_START_DATE) to $(END_DATE)..."
 	$(PYTHON) -m $(MODULE_ROOT).concept2_api --from-date $(REBUILD_START_DATE) --to-date $(END_DATE)
 
 backfill-lactate:
@@ -98,11 +293,11 @@ backfill-lactate:
 # --- Oura ---
 
 ingest-oura: 
-	@echo "--- Ingesting Oura JSON into Parquet oura_summary ---"
+	@echo "Ingesting Oura JSON into Parquet oura_summary..."
 	$(PYTHON) -m $(MODULE_ROOT).oura_json
 
 fetch-oura:
-	@echo "--- Fetching Oura data (from $(START_DATE)) ---"
+	@echo "Fetching Oura data from $(START_DATE)..."
 	@poetry run python scripts/fetch_oura_history.py --start-date $(START_DATE)
 
 # --- JEFIT (Resistance Training) ---
@@ -135,115 +330,18 @@ ingest-protocols:
 	@echo "Ingesting Protocols from downloaded Excel file..."
 	$(PYTHON) -m $(MODULE_ROOT).protocol_excel
 
-# --- Aggregates & Utilities ---
-
-# Define the targets that process data from Data/Raw
-# We list them manually to avoid running fetch-daily (redundant) or the 3-day ingest-concept2
-HISTORICAL_PROCESS_TARGETS := ingest-hae-quick ingest-hae ingest-hae-workouts ingest-oura ingest-jefit ingest-labs ingest-protocols
-
-.PHONY: rebuild-history
-rebuild-history:
-	@echo "--- 1/7: Dropping entire Parquet data lake ---"
-	@$(MAKE) drop-parquet CONFIRM=1
-
-	@echo "--- 2/7: Unarchiving local raw files from Data/Archive ---"
-	@$(MAKE) unarchive
-
-	@echo "--- 3/7: Fetching ALL historical G-Drive sources (Labs, Protocols, HAE) ---"
-	@$(MAKE) fetch-all
-
-	@echo "--- 4/7: Fetching ALL historical API data (from 2020-01-01) ---"
-	@echo "Fetching Oura history..."
-	@$(MAKE) fetch-oura START_DATE=2020-01-01
-	@echo "Fetching Concept2 history..."
-	@$(MAKE) ingest-concept2-history REBUILD_START_DATE=2020-01-01
-
-	@echo "--- 5/7: Ingesting all fetched data into Parquet ---"
-	@set -e; \
-	for t in $(HISTORICAL_PROCESS_TARGETS); do \
-		echo ""; \
-		echo "=== Running $$t ==="; \
-		$(MAKE) $$t; \
-	done
-
-	@echo "--- 6/7: Rebuilding DuckDB views ---"
-	@$(MAKE) duck.views
-
-	@echo "--- 7/7: Validating rebuilt data lake ---"
-	@$(MAKE) validate
-	@echo ""
-	@echo "✅ --- Historical rebuild complete! ---"
-
-show-ingest:
-	@echo "INGEST_TARGETS => $(INGEST_TARGETS)"
-
-all: show-ingest
-	@set -e; \
-	for t in $(INGEST_TARGETS); do \
-		echo ""; \
-		echo "=== Running $$t ==="; \
-		$(MAKE) $$t; \
-	done
-	@echo ""; \
-	echo "✅ All ingestion completed."
-
-reload: drop-parquet all
-
-check-parquet:
-	@echo "Checking Parquet table status..."
-	@$(PYTHON) scripts/check_parquet_status.py
-
-.PHONY: weekly
-
-weekly:
-	@echo "=================================================================="
-	@echo "📅 STARTING WEEKLY INGESTION"
-	@echo "   - Scope: Non-quick HAE, Labs, Protocols (Supps)"
-	@echo "   - Lookback: 7 days for Oura & Concept2"
-	@echo "=================================================================="
-	
-	@# 1. Non-Quick HAE (Daily Metrics + Workouts)
-	@echo "--- [1/5] HAE Daily (Non-Quick) ---"
-	@$(MAKE) fetch-hae-daily
-	@$(MAKE) ingest-hae
-	@$(MAKE) ingest-hae-workouts
-
-	@# 2. Labs
-	@echo "--- [2/5] Labs ---"
-	@$(MAKE) fetch-labs
-	@$(MAKE) ingest-labs
-
-	@# 3. Supps (Protocols)
-	@echo "--- [3/5] Protocols (Supplements) ---"
-	@$(MAKE) fetch-protocols
-	@$(MAKE) ingest-protocols
-
-	@# 4. Oura (Last 7 Days)
-	@echo "--- [4/5] Oura (7-day lookback) ---"
-	@$(MAKE) fetch-oura ingest-oura START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
-
-	@# 5. Concept2 (Last 7 Days)
-	@echo "--- [5/5] Concept2 (7-day lookback) ---"
-	@$(MAKE) ingest-concept2 START_DATE=$(shell date -d '7 days ago' +%Y-%m-%d)
-
-	@echo "✅ Weekly ingest complete."
-
 # ============================================================================
-# Google Drive Fetching (NEW UNIFIED SECTION)
+# Google Drive Fetching
 # ============================================================================
 
-.PHONY: fetch-daily fetch-all fetch-labs fetch-protocols fetch-hae
+.PHONY: fetch-daily fetch-all fetch-labs fetch-protocols fetch-hae fetch-hae-daily fetch-hae-quick
 
-FETCH_SCRIPT := scripts/fetch_drive_sources.py
-
-# --- NEW ---
-# Default for 'make all'. Fetches only daily automated exports.
+# Default for quick updates
 fetch-daily:
 	@echo "Fetching Daily HAE sources (automated exports)..."
 	$(PYTHON) $(FETCH_SCRIPT) hae_daily_metrics hae_daily_workouts
 
-# --- MODIFIED ---
-# Manual target for full historical pulls.
+# Manual target for full historical pulls
 fetch-all:
 	@echo "Fetching ALL Google Drive sources defined in config.yaml..."
 	$(PYTHON) $(FETCH_SCRIPT)
@@ -274,134 +372,65 @@ fetch-hae:
 
 .PHONY: duck.init duck.views duck.query
 
-# --- THIS IS THE ROBUST DuckDB SECTION ---
-PROJECT_ROOT     := $(shell pwd)
-PARQUET_ABS_PATH := $(PROJECT_ROOT)/$(PARQUET_DIR)
-
-# Source template and the temporary, generated SQL file
-SQL_TEMPLATE     := scripts/sql/create-views.sql.template
-SQL_RUN_FILE     := scripts/sql/.create_views_run.sql
-
-# This rule generates the SQL script with absolute paths
-# It is a prerequisite for duck.init and duck.views
+# Generate SQL script with absolute paths
 $(SQL_RUN_FILE): $(SQL_TEMPLATE)
 	@echo "--- Generating SQL script with absolute paths ---"
-	@# Use a delimiter that's not in a file path (like '|')
-	@sed 's|__PARQUET_ROOT__|$(PARQUET_ABS_PATH)|g' $(SQL_TEMPLATE) > $(SQL_RUN_FILE)
+	@sed 's|__PARQUET_DIR__|$(PARQUET_ABS_PATH)|g' $(SQL_TEMPLATE) > $(SQL_RUN_FILE)
+	@echo "✅ Generated: $(SQL_RUN_FILE)"
 
 duck.init: $(SQL_RUN_FILE)
+	@echo "--- Initializing DuckDB at $(DUCKDB_FILE) ---"
 	@mkdir -p $(dir $(DUCKDB_FILE))
-	@echo "Creating/initializing $(DUCKDB_FILE)…"
-	@# Run duckdb from the project root, so all paths are correct
-	poetry run duckdb "$(DUCKDB_FILE)" -init "$(SQL_RUN_FILE)" -c "SELECT 'ok'"
-	@rm -f $(SQL_RUN_FILE)
+	@$(PYTHON) -c "import duckdb; duckdb.connect('$(DUCKDB_FILE)').execute('SELECT 1').fetchall(); print('✅ DuckDB initialized')"
+	@$(MAKE) duck.views
 
 duck.views: $(SQL_RUN_FILE)
-	@echo "Applying views from generated SQL script..."
-	@# Run duckdb from the project root
-	poetry run duckdb "$(DUCKDB_FILE)" -init "$(SQL_RUN_FILE)" -c "SELECT 'ok'"
-	@rm -f $(SQL_RUN_FILE)
+	@echo "--- Applying views from $(SQL_RUN_FILE) ---"
+	@duckdb $(DUCKDB_FILE) < $(SQL_RUN_FILE)
+	@echo "✅ Views applied"
 
-# Usage: make duck.query SQL="SELECT * FROM lake.labs LIMIT 20"
 duck.query:
-	@test -n "$(SQL)" || (echo 'Usage: make duck.query SQL="SELECT …"'; exit 1)
-	@# Run query from project root
-	poetry run duckdb "$(DUCKDB_FILE)" -c "$(SQL)"
+	@test -n "$(SQL)" || (echo "Usage: make duck.query SQL=\"SELECT * FROM lake.labs LIMIT 5\"" && exit 1)
+	@duckdb $(DUCKDB_FILE) "$(SQL)"
 
-# =============================================================================
-# Analysis Targets
-# =============================================================================
-
-.PHONY: analysis.hr analysis.z2 analysis.clean analysis.help
-
-analysis.hr:
-	@echo "Running recovery HR baseline analysis..."
-	poetry run python analysis/scripts/run_hr_analysis.py \
-		--output analysis/outputs/recovery_weekly_$(shell date +%Y%m%d).csv
-
-analysis.z2:
-	@echo "Running Zone 2 power analysis..."
-	poetry run python analysis/scripts/run_z2_analysis.py
-
-analysis.clean:
-	@echo "Cleaning analysis outputs..."
-	@rm -rf analysis/outputs/*.csv analysis/outputs/*.png analysis/outputs/*.html
-	@echo "✅ Analysis outputs cleaned"
-
-# Interactive Analysis Targets
-# =============================================================================
-
-.PHONY: dashboard correlations analysis.iron analysis.kidney
-
-dashboard:
-	@echo "🚀 Launching interactive dashboard..."
-	poetry run streamlit run analysis/apps/dashboard_interactive.py
-
-correlations:
-	@echo "📊 Opening correlation explorer..."
-	poetry run python analysis/scripts/correlations.py
-
-# Preset correlation analyses
-analysis.iron:
-	@echo "Running iron repletion correlation analysis..."
-	@poetry run python analysis/scripts/correlations.py --analysis iron
-
-analysis.kidney:
-	@echo "Running HGH → kidney correlation analysis..."
-	@poetry run python analysis/scripts/correlations.py --analysis kidney
-	
-analysis.help:
-	@echo "Analysis targets:"
-	@echo "  analysis.hr      - Run recovery HR baseline analysis"
-	@echo "  analysis.z2      - Run Zone 2 power analysis"
-	@echo "  analysis.clean   - Clean generated outputs"
-	@echo "Interactive analysis targets:"
-	@echo "  dashboard        - Launch Streamlit interactive dashboard"
-	@echo "  correlations     - Open Plotly correlation explorer"
-	@echo "  analysis.iron    - Generate iron repletion correlation chart"
-	@echo "  analysis.kidney  - Generate HGH→kidney correlation chart"
-
-# This allows you to run: make analysis.run SCRIPT=run_hr_analysis
 # ============================================================================
-# Maintenance & Utilities
+# Analysis Scripts
 # ============================================================================
 
-.PHONY: drop-parquet zipsrc
+.PHONY: sleep.metrics
+
+sleep.metrics:
+	@echo "--- Calculating sleep metrics ---"
+	$(PYTHON) analysis/scripts/calculate_sleep_metrics.py
+
+# ============================================================================
+# Utilities
+# ============================================================================
+
+.PHONY: check-parquet drop-parquet zipsrc unarchive
+
+check-parquet:
+	@echo "Checking Parquet table status..."
+	@$(PYTHON) scripts/check_parquet_status.py
 
 drop-parquet:
-	@{ [ "$(CONFIRM)" = "1" ] || { \
-		echo "❌ Refusing to remove $(PARQUET_DIR)."; \
-		echo "   Re-run with: make drop-parquet CONFIRM=1"; \
-		exit 1; }; }
-	@echo "Removing $(PARQUET_DIR)..."
-	@rm -rf -- "$(PARQUET_DIR)"
-	@echo "✅ Done."
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "⚠️  This will delete ALL Parquet data!"; \
+		echo "   Run: make drop-parquet CONFIRM=1"; \
+		exit 1; \
+	fi
+	@echo "🗑️  Dropping $(PARQUET_DIR)..."
+	@rm -rf $(PARQUET_DIR)
+	@echo "✅ Parquet directory cleared"
 
 unarchive:
-	@echo "--- ♻️  Moving all archived files back to Data/Raw/ ---"
-	@# Create directories just in case they were deleted
-	@mkdir -p Data/Raw/HAE/CSV Data/Raw/HAE/JSON Data/Raw/HAE/Quick
-	@mkdir -p Data/Raw/JEFIT Data/Raw/Concept2 Data/Raw/labs
-	@mkdir -p Data/Raw/Oura/sleep Data/Raw/Oura/activity Data/Raw/Oura/readiness
-	
-	@# Move files, suppressing errors if source directory is empty
-	@echo "Unarchiving HAE CSV..."
-	@mv Data/Archive/HAE/CSV/* Data/Raw/HAE/CSV/ 2>/dev/null || true
-	@echo "Unarchiving HAE JSON..."
-	@mv Data/Archive/HAE/JSON/* Data/Raw/HAE/JSON/ 2>/dev/null || true
-	@echo "Unarchiving HAE Quick..."
-	@mv Data/Archive/HAE/Quick/* Data/Raw/HAE/Quick/ 2>/dev/null || true
-	@echo "Unarchiving JEFIT..."
-	@mv Data/Archive/JEFIT/* Data/Raw/JEFIT/ 2>/dev/null || true
-	@echo "Unarchiving Concept2..."
-	@mv Data/Archive/Concept2/* Data/Raw/Concept2/ 2>/dev/null || true
-	@echo "Unarchiving Labs..."
-	@mv Data/Archive/labs/* Data/Raw/labs/ 2>/dev/null || true
-	@echo "Unarchiving Oura..."
-	@mv DataData/Archive/Oura/sleep/* Data/Raw/Oura/sleep/ 2>/dev/null || true
-	@mv Data/Archive/Oura/activity/* Data/Raw/Oura/activity/ 2>/dev/null || true
-	@mv Data/Archive/Oura/readiness/* Data/Raw/Oura/readiness/ 2>/dev/null || true
-	@echo "✅ Unarchive complete."
+	@echo "Unarchiving Data/Archive → Data/Raw..."
+	@if [ -d "Data/Archive" ]; then \
+		rsync -av Data/Archive/ Data/Raw/; \
+		echo "✅ Unarchive complete"; \
+	else \
+		echo "ℹ️  No Data/Archive directory found"; \
+	fi
 
 zipsrc:
 	@mkdir -p tmp
@@ -421,72 +450,3 @@ zipsrc:
 		-x "*.json" \
 		-x "*.log"
 	@echo "✅ Source-only archive created: $$out"
-
-# ============================================================================
-# Help
-# ============================================================================
-
-help:
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "Health Data Pipeline - Makefile Targets"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo ""
-	@echo "Development:"
-	@echo "  install          - Install dependencies with Poetry"
-	@echo "  lock             - Update poetry.lock"
-	@echo "  lint             - Run ruff + black checks"
-	@echo "  fmt              - Format code with black"
-	@echo "  test             - Run pytest"
-	@echo "  validate         - Run data validation checks"
-	@echo "  dev-shell        - Open Poetry shell"
-	@echo ""
-	@echo "Ingestion - Primary:"
-	@echo "  ingest-hae              - Ingest HAE Automation CSVs (HealthMetrics-...) from Data/Raw/HAE/CSV/"
-	@echo "  ingest-hae-quick        - Ingest HAE Quick Export CSVs (HealthAutoExport-...) from Data/Raw/HAE/Quick/"
-	@echo "  ingest-hae-workouts     - Ingest HAE Workout JSON from Data/Raw/HAE/JSON/"
-	@echo "  ingest-concept2         - Ingest Concept2 workouts from last 3 days"
-	@echo "  ingest-concept2-history - Ingest Concept2 workouts from last 5 years (no strokes)"
-	@echo "  ingest-oura             - Fetch & Ingest Oura data (from $$START_DATE)"
-	@echo "  fetch-oura              - Fetch Oura data without ingesting"
-	@echo "  ingest-jefit            - Ingest latest JEFIT CSV from Data/Raw/JEFIT/"
-	@echo "  ingest-jefit-file       - Ingest specific file: FILE=path/to/export.csv"
-	@echo "  ingest-labs             - Ingest downloaded Labs Excel file -> Parquet"
-	@echo "  ingest-protocols        - Ingest downloaded Protocols Excel file -> Parquet"
-	@echo ""
-	@echo "Ingestion - Google Drive (Fetch):"
-	@echo "  fetch-daily             - (DEFAULT FOR 'all') Fetch daily HAE sources from Google Drive"
-	@echo "  fetch-all               - (MANUAL) Fetch ALL sources from Google Drive defined in config.yaml"
-	@echo "  fetch-labs              - Fetch 'labs' source from Google Drive"
-	@echo "  fetch-protocols         - Fetch 'protocols' source from GoogleDrive"
-	@echo "  fetch-hae               - Fetch all HAE sources from Google Drive"
-	@echo "  fetch-hae-daily         - Fetch Daily HAE sources (CSV + JSON)"
-	@echo "  fetch-hae-quick         - Fetch Quick HAE sources (CSV + JSON)"
-	@echo ""
-	@echo "Ingestion - Utilities:"
-	@echo "  all              - Run all default targets: $(INGEST_TARGETS)"
-	@echo "  show-ingest      - Show which targets will run in 'make all'"
-	@echo "  check-parquet    - Check which Parquet tables exist + row counts"
-	@echo "  backfill-lactate - Extract lactate from Concept2 comments"
-	@echo "  reload           - Drop all Parquet data + re-ingest (CONFIRM=1)"
-	@echo "  rebuild-history  - Fetch ALL history and re-process all data"
-	@echo ""
-	@echo "Testing:"
-	@echo "  test-jefit       - Test JEFIT CSV parsing"
-	@echo ""
-	@echo "DuckDB (Query Engine):"
-	@echo "  duck.init        - Initialize DuckDB database"
-	@echo "  duck.views       - Apply/refresh views from SQL"
-	@echo "  duck.query       - Run query: SQL=\"SELECT * FROM lake.labs\""
-	@echo ""
-	@echo "Utilities:"
-	@echo "  drop-parquet     - Delete $(PARQUET_DIR) (requires CONFIRM=1)"
-	@echo "  zipsrc           - Create source-only ZIP in ./tmp/"
-	@echo "  image            - Build Docker image (tag: hdp:dev)"
-	@echo ""
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "Quick Start:"
-	@echo "  1. make install"
-	@echo "  2. Configure config.yaml and .env with your settings and IDs"
-	@echo "  3. make all          # Fetch daily data from Drive AND run all ingestions"
-	@echo "  4. make check-parquet # Verify data loaded"
-	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
