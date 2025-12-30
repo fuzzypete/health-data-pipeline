@@ -76,14 +76,55 @@ def _combine_notes(row: pd.Series, extra_cols: list[str]) -> str:
     return " | ".join(notes_parts)
 
 
+def _calculate_end_dates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate end_date for each protocol entry based on Active status and subsequent entries.
+
+    Logic:
+    - Active: N → end_date = start_date (this is a stop event)
+    - Active: Y with subsequent entry for same compound → end_date = next_start - 1 day
+    - Active: Y with no subsequent entry → end_date = NULL (ongoing)
+    """
+    df = df.sort_values(['compound_name', 'start_date']).copy()
+
+    # Normalize active column
+    df['_is_active'] = df['active'].str.upper().str.strip() == 'Y'
+
+    # For each compound, calculate end_date
+    def calc_end_for_compound(group):
+        group = group.sort_values('start_date').copy()
+        n = len(group)
+
+        for i in range(n):
+            row_idx = group.index[i]
+            is_active = group.loc[row_idx, '_is_active']
+
+            if not is_active:
+                # Active: N means this is a stop event - end_date = start_date
+                group.loc[row_idx, 'end_date'] = group.loc[row_idx, 'start_date']
+            elif i < n - 1:
+                # Active: Y with subsequent entry - end_date = next start - 1 day
+                next_start = group.iloc[i + 1]['start_date']
+                if pd.notna(next_start):
+                    group.loc[row_idx, 'end_date'] = next_start - pd.Timedelta(days=1)
+            # else: Active: Y with no subsequent entry - leave end_date as NULL (ongoing)
+
+        return group
+
+    # Note: FutureWarning about grouping columns is expected and harmless here
+    df = df.groupby('compound_name', group_keys=False).apply(calc_end_for_compound)
+    df = df.drop(columns=['_is_active'])
+
+    return df
+
+
 def process_protocols(
     df: pd.DataFrame, source_name: str, ingest_run_id: str
 ) -> pd.DataFrame:
     """Clean, normalize, and add metadata to the protocol data."""
 
     schema = get_schema("protocol_history")
-    
-    # --- THIS IS THE FIX for COLUMN MISMATCH ---
+
     # Map your 'Events' sheet columns (from Events.csv) to the schema names
     rename_map = {
         "date": "start_date",
@@ -118,7 +159,16 @@ def process_protocols(
             df[f.name] = None
 
     # Parse dates
-    df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce").dt.date
+    df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
+    df["end_date"] = pd.to_datetime(df["end_date"], errors="coerce")
+
+    # Calculate end_date based on Active status and subsequent entries
+    if 'active' in df.columns:
+        log.info("Calculating end_date from Active status...")
+        df = _calculate_end_dates(df)
+
+    # Convert to date objects (after end_date calculation)
+    df["start_date"] = df["start_date"].dt.date
     df["end_date"] = pd.to_datetime(df["end_date"], errors="coerce").dt.date
 
     # Drop rows where essential columns are missing

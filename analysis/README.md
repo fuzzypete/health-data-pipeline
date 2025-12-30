@@ -13,6 +13,18 @@ analysis/
 └── notebooks/        # Jupyter exploration (when needed)
 ```
 
+## Script Index
+
+See **[scripts/SCRIPT_INDEX.md](scripts/SCRIPT_INDEX.md)** for a complete list of all analysis scripts with usage examples.
+
+**Common scripts:**
+| Script | Purpose |
+|--------|---------|
+| `analyze_interval_session.py` | 30/30 interval analysis with trending |
+| `generate_weekly_report.py` | Weekly training report |
+| `calculate_sleep_metrics.py` | Sleep debt calculator |
+| `run_hr_analysis.py` | HR baseline analysis |
+
 ## Quick Start
 
 **Run recovery HR analysis:**
