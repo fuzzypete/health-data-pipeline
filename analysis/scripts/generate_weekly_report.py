@@ -27,6 +27,15 @@ from typing import Optional
 
 import pandas as pd
 
+from workout_templates import (
+    adjust_template_for_mode,
+    format_weekly_schedule_markdown,
+    format_workout_markdown,
+    get_all_templates,
+    get_week_number,
+    get_weekly_schedule,
+)
+
 # Paths
 OUTPUT_DIR = Path("analysis/outputs")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -626,33 +635,53 @@ def generate_report(now_ctx: Optional[NowContext] = None) -> str:
         lines.append(f"**4-Week Trend:** {improved} improved, {maintained} maintained, {declined} declined")
         lines.append("")
 
-    # === WEEKLY SCHEDULE SUGGESTION ===
+    # === WEEKLY SCHEDULE (detailed) ===
     lines.append("---")
-    lines.append("## Suggested Schedule")
+    schedule = get_weekly_schedule(training_mode)
+    lines.append(format_weekly_schedule_markdown(schedule))
+
+    # === DETAILED WORKOUT STRUCTURES ===
+    lines.append("---")
+    lines.append("## Workout Details")
     lines.append("")
 
+    # Build weight targets dict from plan_df
+    weight_targets = {}
+    if len(plan_df) > 0:
+        for _, row in plan_df.iterrows():
+            weight_targets[row["exercise"]] = row["adjusted_weight_lbs"]
+
+    # Get week-specific templates (exercises rotate by week)
+    week = get_week_number()
+    templates = get_all_templates(week)
+
+    # Output relevant workouts based on training mode
     if training_mode == "OPTIMAL":
-        lines.append("| Day | Focus | Notes |")
-        lines.append("|-----|-------|-------|")
-        lines.append("| Mon | Upper Push | Bench, Incline, Triceps |")
-        lines.append("| Tue | Lower | Squats, Deadlift, Calves |")
-        lines.append("| Wed | Rest | Active recovery or cardio |")
-        lines.append("| Thu | Upper Pull | Rows, Chin-ups, Curls |")
-        lines.append("| Fri | Lower/Full | Remaining exercises |")
-        lines.append("| Sat-Sun | Rest | Recovery |")
+        workouts_to_show = [
+            templates["Upper A"],
+            templates["Lower A"],
+            templates["Upper B"],
+            templates["Lower B"],
+            templates["Core Circuit"],
+        ]
     elif training_mode == "MAINTENANCE":
-        lines.append("| Day | Focus | Notes |")
-        lines.append("|-----|-------|-------|")
-        lines.append("| Mon | Upper | Push + Pull combined |")
-        lines.append("| Wed | Lower | Squats, Deadlift |")
-        lines.append("| Fri | Full Body | Light, maintenance |")
-        lines.append("| Other | Rest | Prioritize sleep |")
+        workouts_to_show = [
+            adjust_template_for_mode(templates["Upper A"], "MAINTENANCE", weight_targets),
+            adjust_template_for_mode(templates["Lower A"], "MAINTENANCE", weight_targets),
+            adjust_template_for_mode(templates["Upper B"], "MAINTENANCE", weight_targets),
+            adjust_template_for_mode(templates["Lower B"], "MAINTENANCE", weight_targets),
+            adjust_template_for_mode(templates["Core Circuit"], "MAINTENANCE", weight_targets),
+        ]
     else:  # DELOAD
-        lines.append("| Day | Focus | Notes |")
-        lines.append("|-----|-------|-------|")
-        lines.append("| Tue | Light Full Body | 60% volume, -10% weight |")
-        lines.append("| Fri | Light Full Body | Focus on movement quality |")
-        lines.append("| Other | Rest | Sleep is the priority |")
+        # For deload, show abbreviated full body workout
+        workouts_to_show = [
+            adjust_template_for_mode(templates["Upper A"], "DELOAD", weight_targets),
+            adjust_template_for_mode(templates["Lower A"], "DELOAD", weight_targets),
+        ]
+
+    for template in workouts_to_show:
+        lines.append(format_workout_markdown(template, weight_targets))
+        lines.append("")
 
     lines.append("")
 
