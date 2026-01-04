@@ -58,8 +58,11 @@ from utils.constants import (
     get_date_range,
 )
 from utils.queries import (
+    get_cardio_score_data,
     get_latest_ferritin,
     get_max_hr_7d,
+    get_recovery_score_data,
+    get_vitals_score_data,
     get_weekly_training_volume,
     query_ferritin,
     query_hrv_data,
@@ -69,6 +72,11 @@ from utils.queries import (
     query_oura_summary,
     query_workouts,
     query_zone2_workouts,
+)
+from utils.scores import (
+    calculate_cardio_score,
+    calculate_recovery_score,
+    calculate_vitals_score,
 )
 
 # =============================================================================
@@ -227,6 +235,258 @@ def render_kpi_card(
         st.caption(f"Target: {target}")
     if sparkline_data is not None and not sparkline_data.empty:
         st.line_chart(sparkline_data, height=50)
+
+
+# =============================================================================
+# Score Cards (PRS, PCS, PVS)
+# =============================================================================
+
+STATUS_COLORS = {
+    "green": "#32CD32",
+    "yellow": "#FFD700",
+    "orange": "#FFA500",
+    "red": "#DC143C",
+}
+
+STATUS_EMOJIS = {
+    "Optimal": "🟢",
+    "Moderate": "🟡",
+    "Compromised": "🟠",
+    "Recovery Needed": "🔴",
+    "Excellent": "🟢",
+    "Good": "🟡",
+    "Attention": "🟠",
+    "Impaired": "🔴",
+    "Concern": "🔴",
+}
+
+
+def render_score_progress_bar(score: int, color: str) -> str:
+    """Generate HTML for a score progress bar."""
+    filled = int(score / 100 * 20)
+    empty = 20 - filled
+    bar_color = STATUS_COLORS.get(color, "#888")
+    return f'<span style="color: {bar_color};">{"█" * filled}</span><span style="color: #444;">{"░" * empty}</span>'
+
+
+def render_recovery_score_card():
+    """Render Peter's Recovery Score (PRS) card with drill-down."""
+    # Fetch data
+    data = get_recovery_score_data()
+
+    # Calculate score
+    score = calculate_recovery_score(
+        sleep_duration_hours=data.get("sleep_duration_hours", 0),
+        sleep_efficiency_pct=data.get("sleep_efficiency_pct"),
+        sleep_debt_hours=data.get("sleep_debt_hours", 0),
+        current_hrv=data.get("current_hrv"),
+        baseline_hrv=data.get("baseline_hrv", 40),
+        current_rhr=data.get("current_rhr"),
+        baseline_rhr=data.get("baseline_rhr", 55),
+        acute_load_min=data.get("acute_load_min", 0),
+        chronic_load_min=data.get("chronic_load_min", 0),
+        days_since_rest=data.get("days_since_rest", 0),
+        yesterday_workout_type=data.get("yesterday_workout_type"),
+    )
+
+    emoji = STATUS_EMOJIS.get(score.status, "")
+
+    # Main score display
+    st.markdown(f"### {emoji} Recovery Score")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.progress(score.total / 100)
+    with col2:
+        st.markdown(f"**{score.total}**")
+
+    st.caption(f"{score.status}")
+
+    # Expandable tier breakdown
+    with st.expander("Score Breakdown", expanded=False):
+        # Sleep & Rest Tier
+        tier = score.tiers["sleep_rest"]
+        st.markdown(f"**Sleep & Rest ({tier.weight})** — {tier.score}")
+        for comp_name, comp_score in tier.components.items():
+            display_name = comp_name.replace("_", " ").title()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+            st.caption(display_name)
+
+        st.divider()
+
+        # Autonomic Tier
+        tier = score.tiers["autonomic"]
+        st.markdown(f"**Autonomic State ({tier.weight})** — {tier.score}")
+        for comp_name, comp_score in tier.components.items():
+            display_name = comp_name.replace("_", " ").title()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+            st.caption(display_name)
+
+        st.divider()
+
+        # Training Load Tier
+        tier = score.tiers["training_load"]
+        st.markdown(f"**Training Load ({tier.weight})** — {tier.score}")
+        for comp_name, comp_score in tier.components.items():
+            display_name = comp_name.replace("_", " ").title()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+            st.caption(display_name)
+
+
+def render_cardio_score_card():
+    """Render Peter's Cardio Score (PCS) card with drill-down."""
+    # Fetch data
+    data = get_cardio_score_data()
+
+    # Calculate score
+    score = calculate_cardio_score(
+        recent_max_hr=data.get("recent_max_hr", 0),
+        current_zone2_watts=data.get("current_zone2_watts", 0),
+        hr_response_minutes=data.get("hr_response_minutes"),
+        hr_recovery_1min=data.get("hr_recovery_1min"),
+        current_efficiency=data.get("current_efficiency"),
+        best_efficiency=data.get("best_efficiency", 1.0),
+        resting_hr=data.get("resting_hr"),
+        current_hrv=data.get("current_hrv"),
+        baseline_hrv=data.get("baseline_hrv", 40),
+    )
+
+    emoji = STATUS_EMOJIS.get(score.status, "")
+
+    # Main score display
+    st.markdown(f"### {emoji} Cardio Score")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.progress(score.total / 100)
+    with col2:
+        st.markdown(f"**{score.total}**")
+
+    st.caption(f"{score.status}")
+
+    # Expandable tier breakdown
+    with st.expander("Score Breakdown", expanded=False):
+        # Capacity Tier
+        tier = score.tiers["capacity_ceiling"]
+        st.markdown(f"**Capacity & Ceiling ({tier.weight})** — {tier.score}")
+        for comp_name, comp_score in tier.components.items():
+            display_name = comp_name.replace("_", " ").title()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+            st.caption(display_name)
+
+        st.divider()
+
+        # Responsiveness Tier
+        tier = score.tiers["responsiveness"]
+        is_limiter = tier.score < score.tiers["capacity_ceiling"].score - 10
+        limiter_marker = " ← LIMITER" if is_limiter else ""
+        st.markdown(f"**Responsiveness ({tier.weight})** — {tier.score}{limiter_marker}")
+        for comp_name, comp_score in tier.components.items():
+            display_name = comp_name.replace("_", " ").title()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+            st.caption(display_name)
+
+        st.divider()
+
+        # Efficiency Tier
+        tier = score.tiers["efficiency_baseline"]
+        st.markdown(f"**Efficiency & Baseline ({tier.weight})** — {tier.score}")
+        for comp_name, comp_score in tier.components.items():
+            display_name = comp_name.replace("_", " ").title()
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+            st.caption(display_name)
+
+
+def render_vitals_score_card():
+    """Render Peter's Vitals Score (PVS) card with drill-down."""
+    # Fetch data
+    data = get_vitals_score_data()
+
+    # Calculate score
+    score = calculate_vitals_score(
+        systolic=data.get("systolic"),
+        diastolic=data.get("diastolic"),
+        resting_hr=data.get("resting_hr"),
+        current_hrv=data.get("current_hrv"),
+        baseline_hrv=data.get("baseline_hrv", 40),
+        spo2=data.get("spo2"),
+        respiratory_rate=data.get("respiratory_rate"),
+    )
+
+    emoji = STATUS_EMOJIS.get(score.status, "")
+
+    # Main score display
+    st.markdown(f"### {emoji} Vitals Score")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.progress(score.total / 100)
+    with col2:
+        st.markdown(f"**{score.total}**")
+
+    st.caption(f"{score.status}")
+
+    # Expandable component breakdown
+    with st.expander("Score Breakdown", expanded=False):
+        components = score.tiers["components"].components
+
+        # Display each component
+        component_labels = {
+            "blood_pressure": ("Blood Pressure", "30%"),
+            "resting_hr": ("Resting HR", "25%"),
+            "hrv": ("HRV", "25%"),
+            "spo2": ("SpO2", "10%"),
+            "respiratory_rate": ("Respiratory Rate", "10%"),
+        }
+
+        for comp_name, comp_score in components.items():
+            label, weight = component_labels.get(comp_name, (comp_name, ""))
+            st.markdown(f"**{label}** ({weight})")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.progress(comp_score / 100)
+            with col2:
+                st.write(f"{comp_score}")
+
+
+def render_score_cards():
+    """Render all three score cards in a row."""
+    st.subheader("Health Scores")
+
+    cols = st.columns(3)
+
+    with cols[0]:
+        render_recovery_score_card()
+
+    with cols[1]:
+        render_cardio_score_card()
+
+    with cols[2]:
+        render_vitals_score_card()
 
 
 def render_hero_kpis(start_date: datetime, end_date: datetime):
@@ -621,6 +881,11 @@ def main():
 
     # Header
     render_header()
+
+    # Health Scores (PRS, PCS, PVS)
+    render_score_cards()
+
+    st.divider()
 
     # Hero KPIs
     render_hero_kpis(start_date, end_date)

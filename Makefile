@@ -104,6 +104,9 @@ help:
 	@echo "  backup.full      - Backup Raw + Parquet to Drive"
 	@echo "  backup.list      - List backup directories in Drive"
 	@echo ""
+	@echo "🚀 Deployment:"
+	@echo "  deploy.refresh   - Copy Data/Parquet → deploy/data for Streamlit"
+	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "Quick Start:"
 	@echo "  1. make install"
@@ -462,6 +465,28 @@ training.weekly:
 dashboard:
 	@echo "--- Launching HDP Dashboard ---"
 	cd analysis/apps && poetry run streamlit run hdp_dashboard.py
+
+# ============================================================================
+# Deployment
+# ============================================================================
+
+.PHONY: deploy.refresh
+
+deploy.refresh:
+	@echo "--- Refreshing deploy/data from Data/Parquet ---"
+	@rm -rf deploy/data/workouts deploy/data/cardio_splits deploy/data/resistance_sets \
+		deploy/data/oura_summary deploy/data/labs deploy/data/lactate deploy/data/protocol_history \
+		deploy/data/cardio_strokes
+	@mkdir -p deploy/data
+	@cp -r Data/Parquet/workouts deploy/data/
+	@cp -r Data/Parquet/cardio_splits deploy/data/
+	@cp -r Data/Parquet/resistance_sets deploy/data/
+	@cp -r Data/Parquet/oura_summary deploy/data/
+	@cp -r Data/Parquet/labs deploy/data/
+	@cp -r Data/Parquet/lactate deploy/data/
+	@cp -r Data/Parquet/protocol_history deploy/data/
+	@cp -r Data/Parquet/cardio_strokes deploy/data/
+	@echo "✅ deploy/data refreshed"
 
 # ============================================================================
 # Utilities
