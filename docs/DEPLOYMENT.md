@@ -21,7 +21,7 @@ poetry run python scripts/export_for_deploy.py --months 12
 poetry run python scripts/export_for_deploy.py
 ```
 
-This creates `data/deploy/` with these tables:
+This creates `deploy/data/` with these tables:
 - workouts
 - cardio_splits
 - resistance_sets
@@ -40,7 +40,7 @@ This creates `data/deploy/` with these tables:
 ### 1. Commit Data & Push
 
 ```bash
-git add data/deploy/
+git add deploy/data/
 git add requirements.txt
 git add .streamlit/
 git commit -m "Add dashboard deployment files"
@@ -73,7 +73,7 @@ git push origin master
 Test the deployed data path locally:
 
 ```bash
-# The dashboard auto-detects data/deploy/ if it exists
+# The dashboard auto-detects deploy/data/ if it exists
 streamlit run analysis/apps/hdp_dashboard.py
 ```
 
@@ -95,7 +95,7 @@ When you want to refresh the deployed data:
 poetry run python scripts/export_for_deploy.py --months 12
 
 # Commit and push
-git add data/deploy/
+git add deploy/data/
 git commit -m "Update dashboard data"
 git push
 
@@ -107,10 +107,10 @@ git push
 ### App won't start
 - Check Streamlit Cloud logs for errors
 - Verify `requirements.txt` has all dependencies
-- Ensure `data/deploy/` was committed (check GitHub)
+- Ensure `deploy/data/` was committed (check GitHub)
 
 ### "No data" in charts
-- Verify parquet files exist in `data/deploy/`
+- Verify parquet files exist in `deploy/data/`
 - Check date ranges in the sidebar
 
 ### Password not working
@@ -127,7 +127,7 @@ health-data-pipeline/
 │   └── utils/
 │       ├── queries.py        # DuckDB queries (auto-detects data path)
 │       └── constants.py
-├── data/deploy/              # Committed data subset for cloud
+├── deploy/data/              # Committed data subset for cloud
 ├── requirements.txt          # Streamlit Cloud dependencies
 ├── .streamlit/
 │   ├── config.toml           # Theme config

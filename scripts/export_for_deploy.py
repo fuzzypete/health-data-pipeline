@@ -134,8 +134,8 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="data/deploy",
-        help="Output directory (default: data/deploy)",
+        default="deploy/data",
+        help="Output directory (default: deploy/data)",
     )
     args = parser.parse_args()
 
@@ -172,7 +172,7 @@ def main():
     print()
     print("Next steps:")
     print("  1. Review the exported data")
-    print("  2. git add data/deploy/")
+    print("  2. git add deploy/data/")
     print("  3. git commit -m 'Add deployment data subset'")
     print("  4. git push")
 

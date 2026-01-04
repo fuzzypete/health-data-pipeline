@@ -1,6 +1,6 @@
 {
   "name": "Health Data Pipeline Dev",
-  "dockerFile": "../Dockerfile",
+  "dockerFile": "../deploy/Dockerfile",
   "remoteUser": "root",
   "workspaceFolder": "/app",
   "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind,consistency=cached",

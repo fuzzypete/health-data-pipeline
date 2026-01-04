@@ -15,9 +15,9 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 # Support both local development and cloud deployment paths
-# Cloud: uses data/deploy/ (committed subset)
+# Cloud: uses deploy/data/ (committed subset)
 # Local: uses Data/Parquet/ (full dataset)
-DEPLOY_DATA_PATH = PROJECT_ROOT / "data" / "deploy"
+DEPLOY_DATA_PATH = PROJECT_ROOT / "deploy" / "data"
 LOCAL_DATA_PATH = PROJECT_ROOT / "Data" / "Parquet"
 
 # Use deployed data if it exists (for Streamlit Cloud), otherwise use local
