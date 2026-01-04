@@ -98,6 +98,12 @@ help:
 	@echo "  sleep.metrics    - Calculate sleep debt from Oura data"
 	@echo "  progression      - Analyze JEFIT strength progression"
 	@echo ""
+	@echo "💾 Backup (rclone):"
+	@echo "  backup           - Backup Data/Raw to Google Drive (alias for backup.raw)"
+	@echo "  backup.raw       - Backup Data/Raw to Google Drive"
+	@echo "  backup.full      - Backup Raw + Parquet to Drive"
+	@echo "  backup.list      - List backup directories in Drive"
+	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "Quick Start:"
 	@echo "  1. make install"
@@ -400,6 +406,29 @@ duck.query:
 	@duckdb $(DUCKDB_FILE) "$(SQL)"
 
 # ============================================================================
+# Backup (via rclone)
+# ============================================================================
+
+BACKUP_REMOTE := gdrive:Personal/Health/Data/HDP/Backups
+
+.PHONY: backup backup.raw backup.full backup.list
+
+backup: backup.raw
+
+backup.raw:
+	@echo "--- Backing up Data/Raw to Google Drive ---"
+	rclone copy Data/Raw "$(BACKUP_REMOTE)/Raw" --progress
+
+backup.full:
+	@echo "--- Backing up Data/Raw + Parquet to Google Drive ---"
+	rclone copy Data/Raw "$(BACKUP_REMOTE)/Raw" --progress
+	rclone copy Data/Parquet "$(BACKUP_REMOTE)/Parquet" --progress
+
+backup.list:
+	@echo "--- Listing backups in Google Drive ---"
+	rclone lsd "$(BACKUP_REMOTE)"
+
+# ============================================================================
 # Analysis Scripts
 # ============================================================================
 
@@ -423,6 +452,16 @@ training.weekly:
 	@echo "--- Generating weekly training report ---"
 	@$(MAKE) training.plan
 	$(PYTHON) analysis/scripts/generate_weekly_report.py
+
+# ============================================================================
+# Dashboard
+# ============================================================================
+
+.PHONY: dashboard
+
+dashboard:
+	@echo "--- Launching HDP Dashboard ---"
+	cd analysis/apps && poetry run streamlit run hdp_dashboard.py
 
 # ============================================================================
 # Utilities

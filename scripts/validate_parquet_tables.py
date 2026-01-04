@@ -87,12 +87,12 @@ TABLE_CONFIGS = {
     },
     "lactate": {
         "path": "Data/Parquet/lactate",
-        "partition_period": "M", # Monthly - uses upsert_by_key
+        "partition_period": "M",  # Monthly - uses upsert_by_key
         "write_strategy": "upsert_by_key",
         "partition_cols": ["date", "source"],
-        "primary_key": ["workout_id", "source"], # Assuming one lactate per workout
-        "expected_sources": ["Concept2_Comment"],
-        "required_fields": ["workout_id", "measurement_time_utc", "lactate_mmol", "source"],
+        "primary_key": ["workout_id", "source", "reading_sequence"],  # Supports multiple readings per workout
+        "expected_sources": ["Concept2_Comment", "Manual"],
+        "required_fields": ["workout_id", "measurement_time_utc", "lactate_mmol", "source", "reading_sequence"],
     },
     "oura_summary": {
         "path": "Data/Parquet/oura_summary",

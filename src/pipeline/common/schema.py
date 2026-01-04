@@ -292,27 +292,52 @@ resistance_sets_schema = pa.schema([
 ])
 
 # ============================================================================
-# Lactate measurements
+# Lactate measurements (enhanced for multi-reading support)
 # ============================================================================
 
 lactate_schema = pa.schema([
     # Link to workout
     pa.field("workout_id", pa.string(), nullable=False),
     pa.field("workout_start_utc", pa.timestamp("us", tz="UTC"), nullable=False),
-    
+
     # Measurement
     pa.field("lactate_mmol", pa.float64(), nullable=False),  # mmol/L
     pa.field("measurement_time_utc", pa.timestamp("us", tz="UTC"), nullable=True),
     pa.field("measurement_context", pa.string(), nullable=True),  # e.g., "post-workout"
     pa.field("notes", pa.string(), nullable=True),  # Original comment text
-    
+
     # Lineage
     pa.field("source", pa.string(), nullable=False),  # 'Concept2_Comment' or 'Manual'
     pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("ingest_run_id", pa.string(), nullable=True),
-    
+
     # Hive partitioning
     pa.field("date", pa.string(), nullable=True),
+
+    # === Multi-reading support (added 2026-01) ===
+
+    # Reading identification (enables multiple readings per workout)
+    pa.field("reading_sequence", pa.int32(), nullable=False),  # 1, 2, 3... within workout
+
+    # Timing context
+    pa.field("elapsed_minutes", pa.float64(), nullable=True),  # Minutes from workout start
+
+    # Context at time of reading
+    pa.field("watts_at_reading", pa.int32(), nullable=True),
+    pa.field("hr_at_reading", pa.int32(), nullable=True),
+
+    # Test classification
+    pa.field("test_type", pa.string(), nullable=True),  # 'zone2_single', 'zone2_multi', 'step_test'
+    pa.field("step_number", pa.int32(), nullable=True),  # Only for step_test
+
+    # Equipment context
+    pa.field("equipment_type", pa.string(), nullable=True),  # 'BikeErg', 'RowErg', etc.
+
+    # Quality control
+    pa.field("strip_batch", pa.string(), nullable=True),  # Manufacturer lot number
+    pa.field("storage_location", pa.string(), nullable=True),  # 'bedroom_closet', 'bathroom', etc.
+    pa.field("is_outlier", pa.bool_(), nullable=True),  # Flag for outlier readings
+    pa.field("outlier_reason", pa.string(), nullable=True),  # 'retest_lower', 'strip_humidity', etc.
 ])
 
 # ============================================================================
