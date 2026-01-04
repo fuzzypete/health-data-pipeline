@@ -45,3 +45,8 @@ analysis/notebooks/.ipynb_checkpoints/
 *.ipynb_checkpoints/
 
 .claude
+
+# Streamlit secrets (local dev)
+.streamlit/secrets.toml
+# analysis/apps link
+analysis/apps/.streamlit

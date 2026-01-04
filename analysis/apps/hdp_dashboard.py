@@ -391,11 +391,14 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
         )
 
         fig.update_layout(
+            template="plotly_dark",
             title="Zone 2 Power Progression + Ferritin",
             hovermode="x unified",
             height=400,
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(l=0, r=0, t=60, b=0),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
         fig.update_xaxes(title_text="Date")
         fig.update_yaxes(title_text="Power (watts)", secondary_y=False)
@@ -458,11 +461,14 @@ def render_recovery_section(start_date: datetime, end_date: datetime):
             )
 
         fig.update_layout(
+            template="plotly_dark",
             title="HRV & Readiness Trend",
             height=350,
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(l=0, r=0, t=60, b=0),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
         fig.update_yaxes(title_text="HRV Score", secondary_y=False)
         fig.update_yaxes(title_text="Readiness Score", secondary_y=True)
@@ -526,6 +532,7 @@ def render_strength_section(start_date: datetime, end_date: datetime):
                 )
 
         fig.update_layout(
+            template="plotly_dark",
             title="Key Lift Progression",
             xaxis_title="Date",
             yaxis_title="Weight (lbs)",
@@ -533,6 +540,8 @@ def render_strength_section(start_date: datetime, end_date: datetime):
             height=350,
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(l=0, r=0, t=60, b=0),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
 
         st.plotly_chart(fig, use_container_width=True)
