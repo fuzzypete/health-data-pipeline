@@ -307,9 +307,13 @@ backfill-lactate:
 
 # --- Oura ---
 
-ingest-oura: 
+ingest-oura:
 	@echo "Ingesting Oura JSON into Parquet oura_summary..."
 	$(PYTHON) -m $(MODULE_ROOT).oura_json
+
+ingest-polar:
+	@echo "Ingesting Polar H10 ECG/RR data..."
+	$(PYTHON) -m $(MODULE_ROOT).polar_h10
 
 fetch-oura:
 	@echo "Fetching Oura data from $(START_DATE)..."

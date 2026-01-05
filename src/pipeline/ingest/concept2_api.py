@@ -601,32 +601,7 @@ def ingest_workouts_by_date(
             counts["workouts"] = len(workouts_combined)
             log.info(f"Wrote {counts['workouts']} workouts")
 
-            # ---- Extract lactate from comments ----  # 
-            log.info("Extracting lactate measurements from comments...")
-            lactate_df = extract_lactate_from_workouts(
-                workouts_combined,
-                ingest_run_id,
-                source="Concept2_Comment"
-            )
-            
-            if not lactate_df.empty:
-                lactate_df = create_date_partition_column(
-                    lactate_df, "workout_start_utc", "date", "M"
-                )
-                lactate_table = create_lactate_table(lactate_df)
-                
-                upsert_by_key(
-                    lactate_df,
-                    LACTATE_PATH,
-                    primary_key=["workout_id", "source"],
-                    partition_cols=["date", "source"],
-                    schema=get_schema("lactate"),
-                )
-                counts["lactate"] = len(lactate_df)
-                log.info(f"Extracted {counts['lactate']} lactate measurements")
-            else:
-                counts["lactate"] = 0
-                log.info("No lactate measurements found in comments")
+            # Note: lactate extraction moved to after strokes for pause detection
 
     if all_splits:
         splits_combined = pd.concat(all_splits, ignore_index=True)
@@ -664,6 +639,37 @@ def ingest_workouts_by_date(
             )
             counts["strokes"] = len(strokes_combined)
             log.info(f"Wrote {counts['strokes']} strokes")
+
+    # ---- Extract lactate from comments (after strokes for pause detection) ----
+    if all_workouts:
+        workouts_for_lactate = pd.concat(all_workouts, ignore_index=True) if len(all_workouts) > 1 else all_workouts[0]
+        strokes_for_lactate = pd.concat(all_strokes, ignore_index=True) if all_strokes else None
+
+        log.info("Extracting lactate measurements from comments...")
+        lactate_df = extract_lactate_from_workouts(
+            workouts_for_lactate,
+            ingest_run_id,
+            source="Concept2_Comment",
+            strokes_df=strokes_for_lactate,
+        )
+
+        if not lactate_df.empty:
+            lactate_df = create_date_partition_column(
+                lactate_df, "workout_start_utc", "date", "M"
+            )
+
+            upsert_by_key(
+                lactate_df,
+                LACTATE_PATH,
+                primary_key=["workout_id", "source"],
+                partition_cols=["date", "source"],
+                schema=get_schema("lactate"),
+            )
+            counts["lactate"] = len(lactate_df)
+            log.info(f"Extracted {counts['lactate']} lactate measurements")
+        else:
+            counts["lactate"] = 0
+            log.info("No lactate measurements found in comments")
 
     log.info(f"Concept2 ingestion complete: {counts}")
     return counts

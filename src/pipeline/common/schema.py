@@ -440,6 +440,91 @@ oura_summary_schema = pa.schema([
 ])
 
 # ============================================================================
+# Polar H10 ECG-derived metrics
+# ============================================================================
+
+polar_rr_schema = pa.schema([
+    # Linkage
+    pa.field("workout_id", pa.string(), nullable=False),
+    pa.field("workout_start_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+
+    # Beat-to-beat data
+    pa.field("beat_number", pa.int32(), nullable=False),
+    pa.field("time_cumulative_ms", pa.int64(), nullable=False),
+    pa.field("rr_interval_ms", pa.int32(), nullable=False),
+    pa.field("hr_instantaneous", pa.float32(), nullable=True),  # 60000/rr
+
+    # Lineage
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Partition
+    pa.field("date", pa.string(), nullable=True),
+])
+
+
+polar_session_schema = pa.schema([
+    # Linkage (can be linked to Concept2 workout_id if timestamps align)
+    pa.field("session_id", pa.string(), nullable=False),
+    pa.field("workout_id", pa.string(), nullable=True),  # Linked Concept2 workout if matched
+    pa.field("start_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("end_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("duration_sec", pa.float32(), nullable=False),
+
+    # Session summary
+    pa.field("total_beats", pa.int32(), nullable=False),
+    pa.field("avg_hr", pa.float32(), nullable=True),
+    pa.field("max_hr", pa.float32(), nullable=True),
+    pa.field("min_hr", pa.float32(), nullable=True),
+
+    # HRV metrics
+    pa.field("rmssd_ms", pa.float32(), nullable=True),
+    pa.field("sdnn_ms", pa.float32(), nullable=True),
+
+    # File reference
+    pa.field("source_file", pa.string(), nullable=True),
+
+    # Lineage
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Partition
+    pa.field("date", pa.string(), nullable=True),
+])
+
+
+polar_respiratory_schema = pa.schema([
+    # Linkage
+    pa.field("session_id", pa.string(), nullable=False),
+    pa.field("workout_id", pa.string(), nullable=True),
+
+    # Time window
+    pa.field("window_start_sec", pa.float32(), nullable=False),
+    pa.field("window_end_sec", pa.float32(), nullable=False),
+    pa.field("window_center_min", pa.float32(), nullable=False),
+
+    # Respiratory metrics (derived from ECG/RR)
+    pa.field("respiratory_rate", pa.float32(), nullable=False),  # breaths/min
+    pa.field("derivation_method", pa.string(), nullable=False),  # 'edr' or 'rsa'
+    pa.field("confidence", pa.float32(), nullable=True),  # Signal quality 0-1
+
+    # Concurrent HR for correlation
+    pa.field("avg_hr", pa.float32(), nullable=True),
+    pa.field("rmssd_ms", pa.float32(), nullable=True),
+
+    # Lineage
+    pa.field("source", pa.string(), nullable=False),
+    pa.field("ingest_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("ingest_run_id", pa.string(), nullable=True),
+
+    # Partition
+    pa.field("date", pa.string(), nullable=True),
+])
+
+
+# ============================================================================
 # Schema registry (for convenience)
 # ============================================================================
 
@@ -451,9 +536,12 @@ SCHEMAS = {
     'cardio_splits': cardio_splits_schema,
     'cardio_strokes': cardio_strokes_schema,
     'resistance_sets': resistance_sets_schema,
-    'lactate': lactate_schema, 
-    'protocol_history': protocol_history_schema, 
+    'lactate': lactate_schema,
+    'protocol_history': protocol_history_schema,
     'oura_summary': oura_summary_schema,
+    'polar_rr': polar_rr_schema,
+    'polar_session': polar_session_schema,
+    'polar_respiratory': polar_respiratory_schema,
 }
 
 def get_schema(table_name: str) -> pa.Schema:

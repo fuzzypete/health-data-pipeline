@@ -41,6 +41,7 @@ RAW_OURA_DIR = RAW_ROOT / "Oura"
 RAW_OURA_SLEEP_DIR = RAW_OURA_DIR / "sleep"
 RAW_OURA_ACTIVITY_DIR = RAW_OURA_DIR / "activity"
 RAW_OURA_READINESS_DIR = RAW_OURA_DIR / "readiness"
+RAW_POLAR_DIR = RAW_ROOT / "Polar"
 
 # Archive directories - organized by source
 ARCHIVE_HAE_DIR = ARCHIVE_ROOT / "HAE"
@@ -64,8 +65,11 @@ CARDIO_STROKES_PATH = PARQUET_ROOT / "cardio_strokes"
 LACTATE_PATH = PARQUET_ROOT / "lactate"
 RESISTANCE_SETS_PATH = PARQUET_ROOT / "resistance_sets"
 LABS_PATH = PARQUET_ROOT / "labs"
-PROTOCOL_HISTORY_PATH = PARQUET_ROOT / "protocol_history" 
-OURA_SUMMARY_PATH = PARQUET_ROOT / "oura_summary" 
+PROTOCOL_HISTORY_PATH = PARQUET_ROOT / "protocol_history"
+OURA_SUMMARY_PATH = PARQUET_ROOT / "oura_summary"
+POLAR_RR_PATH = PARQUET_ROOT / "polar_rr"
+POLAR_SESSION_PATH = PARQUET_ROOT / "polar_sessions"
+POLAR_RESPIRATORY_PATH = PARQUET_ROOT / "polar_respiratory"
 
 # Credentials / Tokens
 OURA_TOKENS_FILE_PATH = DATA_ROOT / "oura_tokens.json"
@@ -80,7 +84,8 @@ for path in [
     RAW_LABS_DIR, 
     RAW_OURA_SLEEP_DIR,
     RAW_OURA_ACTIVITY_DIR,
-    RAW_OURA_READINESS_DIR,    
+    RAW_OURA_READINESS_DIR,
+    RAW_POLAR_DIR,
     ARCHIVE_HAE_CSV_DIR,
     ARCHIVE_HAE_JSON_DIR,
     ARCHIVE_HAE_QUICK_DIR,  

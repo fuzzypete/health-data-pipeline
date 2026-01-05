@@ -279,11 +279,84 @@ def detect_power_steps(
     return steps
 
 
+def detect_reading_pauses(
+    strokes_df: pd.DataFrame,
+    num_readings: int,
+    min_gap_seconds: float = 15.0,
+) -> list[float] | None:
+    """
+    Detect brief pauses in stroke data where lactate readings were likely taken.
+
+    During a Zone 2 multi-reading session, the athlete briefly stops to take
+    a lactate measurement. This creates gaps in the stroke data.
+
+    Args:
+        strokes_df: Stroke data with 'time_cumulative_s' column
+        num_readings: Expected number of readings to find
+        min_gap_seconds: Minimum gap to consider a reading pause
+
+    Returns:
+        List of elapsed minutes where readings were taken, or None if not detected.
+    """
+    if strokes_df.empty or "time_cumulative_s" not in strokes_df.columns:
+        return None
+
+    strokes = strokes_df.copy()
+    strokes = strokes.sort_values("time_cumulative_s")
+
+    # Calculate time between consecutive strokes
+    time_diffs = strokes["time_cumulative_s"].diff()
+
+    # Find significant gaps (longer than min_gap_seconds)
+    # Normal stroke intervals are ~2-3 seconds
+    gap_mask = time_diffs > min_gap_seconds
+    gap_indices = strokes.index[gap_mask].tolist()
+
+    if not gap_indices:
+        return None
+
+    # Get the time of each gap (use time at end of gap when reading was taken)
+    gap_times = []
+    for idx in gap_indices:
+        # The gap ends at this index's time (when they resumed)
+        # The reading was taken during the gap, so use the time just before resuming
+        gap_end_sec = strokes.loc[idx, "time_cumulative_s"]
+        gap_times.append(gap_end_sec / 60.0)  # Convert to minutes
+
+    # If we found gaps matching our expected reading count, use them
+    # Allow for the final reading at workout end
+    if len(gap_times) == num_readings:
+        return gap_times
+    elif len(gap_times) == num_readings - 1:
+        # Last reading was probably at workout end
+        total_duration_min = strokes["time_cumulative_s"].max() / 60.0
+        gap_times.append(total_duration_min)
+        return gap_times
+
+    # If we have more gaps than readings, take the N largest gaps
+    if len(gap_times) > num_readings:
+        # Get gap durations to pick largest ones
+        gaps_with_duration = []
+        for idx in gap_indices:
+            gap_duration = time_diffs.loc[idx]
+            gap_end_time = strokes.loc[idx, "time_cumulative_s"]
+            gaps_with_duration.append((gap_end_time / 60.0, gap_duration))
+
+        # Sort by duration (largest gaps) and take top N
+        gaps_with_duration.sort(key=lambda x: x[1], reverse=True)
+        selected = gaps_with_duration[:num_readings]
+        # Sort by time to get chronological order
+        selected.sort(key=lambda x: x[0])
+        return [g[0] for g in selected]
+
+    return None
+
+
 def classify_multi_reading_workout(
     workout_id: str,
     num_readings: int,
     strokes_df: pd.DataFrame | None,
-) -> tuple[str, list[dict] | None]:
+) -> tuple[str, list[dict] | None, list[float] | None]:
     """
     Classify a workout with multiple lactate readings.
 
@@ -293,27 +366,28 @@ def classify_multi_reading_workout(
         strokes_df: Stroke data for this workout (or None if unavailable)
 
     Returns:
-        Tuple of (test_type, steps_data)
+        Tuple of (test_type, steps_data, reading_times)
         - test_type: 'step_test' or 'zone2_multi'
         - steps_data: List of step dicts if step_test, None otherwise
+        - reading_times: List of elapsed minutes for zone2_multi, None otherwise
     """
     if strokes_df is None or strokes_df.empty:
         # No stroke data - default to zone2_multi (safer assumption)
-        return "zone2_multi", None
+        return "zone2_multi", None, None
 
     # Analyze stroke data for power steps
     steps = detect_power_steps(strokes_df)
 
-    if steps is None:
-        return "zone2_multi", None
+    if steps is not None:
+        # Check if number of steps roughly matches number of readings
+        # Allow some flexibility (readings might not perfectly match steps)
+        if abs(len(steps) - num_readings) <= 2:
+            return "step_test", steps, None
 
-    # Check if number of steps roughly matches number of readings
-    # Allow some flexibility (readings might not perfectly match steps)
-    if abs(len(steps) - num_readings) <= 2:
-        return "step_test", steps
+    # Not a step test - try to detect reading pauses for zone2_multi
+    reading_times = detect_reading_pauses(strokes_df, num_readings)
 
-    # If step count doesn't match reading count, be conservative
-    return "zone2_multi", None
+    return "zone2_multi", None, reading_times
 
 
 def extract_lactate_from_workouts(
@@ -363,7 +437,7 @@ def extract_lactate_from_workouts(
                 workout_strokes = strokes_df[strokes_df["workout_id"] == str(workout_id)]
 
             # Classify based on stroke data
-            test_type, steps_data = classify_multi_reading_workout(
+            test_type, steps_data, reading_times = classify_multi_reading_workout(
                 workout_id, len(readings), workout_strokes
             )
 
@@ -382,8 +456,11 @@ def extract_lactate_from_workouts(
                     hr_at_reading = step["avg_hr"]
                     elapsed_min = float(step["end_min"])
                     step_number = i
+                elif reading_times and i <= len(reading_times):
+                    # Use detected pause times from stroke data
+                    elapsed_min = reading_times[i - 1]
                 else:
-                    # Estimate elapsed time for zone2_multi
+                    # Fallback: estimate elapsed time for zone2_multi
                     # Assume readings roughly evenly spaced
                     duration_s = row.get("duration_s")
                     if duration_s and duration_s > 0:

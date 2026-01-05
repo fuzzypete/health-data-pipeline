@@ -1292,3 +1292,324 @@ def get_vo2max_data() -> dict:
         result["trend"] = []
 
     return result
+
+
+# =============================================================================
+# Zone 2 Analysis Queries
+# =============================================================================
+
+
+@st.cache_data(ttl=3600)
+def get_zone2_workouts_with_lactate(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> pd.DataFrame:
+    """
+    Get Zone 2 workouts that have lactate readings.
+
+    Returns DataFrame with workout summary and lactate reading count.
+    """
+    conn = get_connection()
+
+    date_filter = ""
+    if start_date and end_date:
+        date_filter = f"AND w.start_time_utc BETWEEN '{start_date.isoformat()}' AND '{end_date.isoformat()}'"
+
+    query = f"""
+        WITH lactate_counts AS (
+            SELECT
+                workout_id,
+                COUNT(*) as reading_count,
+                MIN(lactate_mmol) as min_lactate,
+                MAX(lactate_mmol) as max_lactate,
+                MAX(test_type) as test_type
+            FROM read_parquet('{_parquet_path("lactate")}')
+            GROUP BY workout_id
+        )
+        SELECT
+            w.workout_id,
+            w.start_time_utc,
+            w.start_time_utc::DATE as workout_date,
+            w.erg_type,
+            w.duration_s / 60.0 as duration_min,
+            w.avg_hr_bpm,
+            w.max_hr_bpm,
+            l.reading_count,
+            l.min_lactate,
+            l.max_lactate,
+            l.test_type
+        FROM read_parquet('{_parquet_path("workouts")}') w
+        JOIN lactate_counts l ON w.workout_id = l.workout_id
+        WHERE w.erg_type IS NOT NULL
+        {date_filter}
+        ORDER BY w.start_time_utc DESC
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying Zone 2 workouts: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def get_workout_lactate_readings(workout_id: str) -> pd.DataFrame:
+    """Get all lactate readings for a specific workout."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            reading_sequence,
+            elapsed_minutes,
+            lactate_mmol,
+            watts_at_reading,
+            hr_at_reading,
+            measurement_context,
+            notes
+        FROM read_parquet('{_parquet_path("lactate")}')
+        WHERE workout_id = '{workout_id}'
+        ORDER BY reading_sequence
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying lactate readings: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def get_workout_stroke_data(workout_id: str) -> pd.DataFrame:
+    """Get stroke-level data for a workout."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            time_cumulative_s / 60.0 as elapsed_min,
+            heart_rate_bpm,
+            watts,
+            stroke_rate_spm as cadence
+        FROM read_parquet('{_parquet_path("cardio_strokes")}')
+        WHERE workout_id = '{workout_id}'
+          AND heart_rate_bpm IS NOT NULL
+          AND heart_rate_bpm > 0
+        ORDER BY time_cumulative_s
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying stroke data: {e}")
+        return pd.DataFrame()
+
+
+def calculate_interval_metrics(
+    stroke_df: pd.DataFrame,
+    lactate_df: pd.DataFrame,
+) -> list[dict]:
+    """
+    Calculate metrics for intervals between lactate readings.
+
+    Args:
+        stroke_df: Stroke-level data with elapsed_min, heart_rate_bpm, watts, cadence
+        lactate_df: Lactate readings with elapsed_minutes, lactate_mmol
+
+    Returns:
+        List of dicts with interval metrics
+    """
+    if stroke_df.empty or lactate_df.empty:
+        return []
+
+    intervals = []
+    reading_times = [0] + lactate_df["elapsed_minutes"].tolist()
+
+    for i in range(len(reading_times) - 1):
+        start_min = reading_times[i]
+        end_min = reading_times[i + 1]
+
+        # Filter strokes for this interval
+        mask = (stroke_df["elapsed_min"] >= start_min) & (stroke_df["elapsed_min"] < end_min)
+        interval_data = stroke_df[mask]
+
+        if interval_data.empty:
+            continue
+
+        # Get HR at start and end of interval for drift calculation
+        hr_start = interval_data.iloc[:10]["heart_rate_bpm"].mean() if len(interval_data) >= 10 else interval_data.iloc[0]["heart_rate_bpm"]
+        hr_end = interval_data.iloc[-10:]["heart_rate_bpm"].mean() if len(interval_data) >= 10 else interval_data.iloc[-1]["heart_rate_bpm"]
+
+        # Lactate at end of this interval
+        lactate_reading = lactate_df[lactate_df["elapsed_minutes"] == end_min]
+        lactate_value = lactate_reading["lactate_mmol"].values[0] if not lactate_reading.empty else None
+
+        intervals.append({
+            "interval": i + 1,
+            "start_min": round(start_min, 1),
+            "end_min": round(end_min, 1),
+            "duration_min": round(end_min - start_min, 1),
+            "avg_watts": round(interval_data["watts"].mean(), 1),
+            "avg_hr": round(interval_data["heart_rate_bpm"].mean(), 1),
+            "hr_start": round(hr_start, 1),
+            "hr_end": round(hr_end, 1),
+            "hr_drift": round(hr_end - hr_start, 1),
+            "avg_cadence": round(interval_data["cadence"].mean(), 1),
+            "lactate_mmol": lactate_value,
+        })
+
+    return intervals
+
+
+def calculate_cardiac_drift(stroke_df: pd.DataFrame, workout_duration_min: float) -> dict:
+    """
+    Calculate cardiac drift for a workout.
+
+    Cardiac drift = increase in HR over time at constant power.
+    Measured as % increase in HR from first 10 min to last 10 min.
+
+    Args:
+        stroke_df: Stroke-level data
+        workout_duration_min: Total workout duration
+
+    Returns:
+        Dict with drift metrics
+    """
+    if stroke_df.empty or workout_duration_min < 20:
+        return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient data"}
+
+    # First 10 minutes (after 2 min warmup)
+    early_mask = (stroke_df["elapsed_min"] >= 2) & (stroke_df["elapsed_min"] <= 12)
+    early_data = stroke_df[early_mask]
+
+    # Last 10 minutes
+    late_start = max(workout_duration_min - 10, 15)
+    late_mask = stroke_df["elapsed_min"] >= late_start
+    late_data = stroke_df[late_mask]
+
+    if early_data.empty or late_data.empty:
+        return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient data"}
+
+    # Calculate averages
+    early_hr = early_data["heart_rate_bpm"].mean()
+    late_hr = late_data["heart_rate_bpm"].mean()
+    early_watts = early_data["watts"].mean()
+    late_watts = late_data["watts"].mean()
+
+    # Only calculate drift if power is relatively constant (within 10%)
+    power_change_pct = abs(late_watts - early_watts) / early_watts * 100 if early_watts > 0 else 100
+
+    if power_change_pct > 15:
+        return {
+            "drift_pct": None,
+            "drift_bpm": None,
+            "status": f"Power not constant ({power_change_pct:.0f}% change)",
+            "early_hr": round(early_hr, 1),
+            "late_hr": round(late_hr, 1),
+            "early_watts": round(early_watts, 1),
+            "late_watts": round(late_watts, 1),
+        }
+
+    drift_bpm = late_hr - early_hr
+    drift_pct = (drift_bpm / early_hr) * 100 if early_hr > 0 else 0
+
+    # Normalize to per-hour rate
+    time_span_hr = (workout_duration_min - 12) / 60  # Approximate time span
+    drift_per_hour = drift_pct / time_span_hr if time_span_hr > 0 else drift_pct
+
+    # Status based on drift
+    if drift_per_hour < 3:
+        status = "Excellent"
+    elif drift_per_hour < 5:
+        status = "Good"
+    elif drift_per_hour < 8:
+        status = "Moderate"
+    else:
+        status = "High"
+
+    return {
+        "drift_pct": round(drift_pct, 1),
+        "drift_bpm": round(drift_bpm, 1),
+        "drift_per_hour_pct": round(drift_per_hour, 1),
+        "status": status,
+        "early_hr": round(early_hr, 1),
+        "late_hr": round(late_hr, 1),
+        "early_watts": round(early_watts, 1),
+        "late_watts": round(late_watts, 1),
+        "early_period": "2-12 min",
+        "late_period": f"{late_start:.0f}-{workout_duration_min:.0f} min",
+    }
+
+
+@st.cache_data(ttl=3600)
+def get_zone2_workout_analysis(workout_id: str) -> dict:
+    """
+    Get complete Zone 2 analysis for a workout.
+
+    Returns dict with:
+    - workout: Basic workout info
+    - lactate_readings: List of lactate readings
+    - intervals: Metrics per interval between readings
+    - cardiac_drift: Overall drift calculation
+    - stroke_summary: Aggregated stroke data for charting
+    """
+    conn = get_connection()
+    result = {}
+
+    # Get workout info
+    try:
+        workout_query = f"""
+            SELECT
+                workout_id,
+                start_time_utc,
+                erg_type,
+                duration_s / 60.0 as duration_min,
+                avg_hr_bpm,
+                max_hr_bpm,
+                avg_pace_sec_per_500m,
+                notes
+            FROM read_parquet('{_parquet_path("workouts")}')
+            WHERE workout_id = '{workout_id}'
+        """
+        df = conn.execute(workout_query).df()
+        if not df.empty:
+            result["workout"] = df.iloc[0].to_dict()
+        else:
+            return {"error": "Workout not found"}
+    except Exception as e:
+        return {"error": str(e)}
+
+    # Get lactate readings
+    lactate_df = get_workout_lactate_readings(workout_id)
+    result["lactate_readings"] = lactate_df.to_dict("records") if not lactate_df.empty else []
+
+    # Get stroke data
+    stroke_df = get_workout_stroke_data(workout_id)
+
+    # Calculate interval metrics
+    if not lactate_df.empty and not stroke_df.empty:
+        result["intervals"] = calculate_interval_metrics(stroke_df, lactate_df)
+    else:
+        result["intervals"] = []
+
+    # Calculate cardiac drift
+    if not stroke_df.empty:
+        result["cardiac_drift"] = calculate_cardiac_drift(
+            stroke_df,
+            result["workout"]["duration_min"]
+        )
+    else:
+        result["cardiac_drift"] = {"status": "No stroke data"}
+
+    # Aggregate stroke data for charting (1-minute buckets)
+    if not stroke_df.empty:
+        stroke_df["minute_bucket"] = stroke_df["elapsed_min"].astype(int)
+        summary = stroke_df.groupby("minute_bucket").agg({
+            "heart_rate_bpm": "mean",
+            "watts": "mean",
+            "cadence": "mean",
+        }).reset_index()
+        summary.columns = ["minute", "hr", "watts", "cadence"]
+        result["stroke_summary"] = summary.to_dict("records")
+    else:
+        result["stroke_summary"] = []
+
+    return result
