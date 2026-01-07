@@ -99,11 +99,21 @@ def derive_respiratory_rate_edr(
         ecg_data: DataFrame with 'time_sec' and 'ecg' columns
         window_sec: Analysis window in seconds
         step_sec: Step between windows
-        fs: ECG sample rate in Hz
+        fs: Default ECG sample rate in Hz (calculated from data if possible)
 
     Returns:
         DataFrame with respiratory rate for each window
     """
+    if ecg_data.empty or "ecg" not in ecg_data.columns:
+        return pd.DataFrame()
+
+    # Calculate actual fs from timestamps
+    if len(ecg_data) > 1:
+        avg_delta = ecg_data["time_sec"].diff().mean()
+        if avg_delta > 0:
+            fs = 1.0 / avg_delta
+            log.info(f"Calculated ECG sample rate: {fs:.2f} Hz")
+
     ecg = ecg_data["ecg"].values
     time_sec = ecg_data["time_sec"].values
 
@@ -185,30 +195,47 @@ def calculate_hrv_metrics(rr_intervals: np.ndarray) -> dict:
 
 def match_to_concept2_workout(
     start_utc: pd.Timestamp, end_utc: pd.Timestamp
-) -> str | None:
+) -> tuple[str, pd.Timestamp] | tuple[None, None]:
     """
     Try to match Polar session to a Concept2 workout by timestamp overlap.
 
-    Returns workout_id if matched, None otherwise.
+    When multiple workouts overlap, prefer the longer one (main workout vs warmup).
+
+    Returns (workout_id, start_time_utc) if matched, (None, None) otherwise.
     """
     try:
         import duckdb
 
         con = duckdb.connect()
+
+        # Find all workouts that overlap with the Polar session window
+        # Order by duration descending to prefer the main workout over warmup
         result = con.execute(
             f"""
-            SELECT workout_id
+            SELECT workout_id, start_time_utc
             FROM read_parquet('Data/Parquet/workouts/**/*.parquet')
             WHERE source = 'Concept2'
-              AND start_time_utc BETWEEN '{start_utc - pd.Timedelta(minutes=5)}'
-                                     AND '{end_utc + pd.Timedelta(minutes=5)}'
-            ORDER BY ABS(EPOCH(start_time_utc) - EPOCH(TIMESTAMP '{start_utc}'))
+              AND (
+                -- Workout starts during Polar session
+                (start_time_utc >= '{start_utc - pd.Timedelta(minutes=5)}'
+                 AND start_time_utc <= '{end_utc + pd.Timedelta(minutes=5)}')
+                OR
+                -- Workout ends during Polar session
+                (end_time_utc >= '{start_utc - pd.Timedelta(minutes=5)}'
+                 AND end_time_utc <= '{end_utc + pd.Timedelta(minutes=5)}')
+                OR
+                -- Polar session is within workout
+                (start_time_utc <= '{start_utc}'
+                 AND end_time_utc >= '{end_utc}')
+              )
+            ORDER BY duration_s DESC
             LIMIT 1
         """
         ).fetchone()
-        return result[0] if result else None
-    except Exception:
-        return None
+        return (result[0], pd.Timestamp(result[1])) if result else (None, None)
+    except Exception as e:
+        log.error(f"Error matching to Concept2: {e}")
+        return None, None
 
 
 def ingest_polar_file(file_path: Path, ingest_run_id: str) -> dict:
@@ -228,9 +255,14 @@ def ingest_polar_file(file_path: Path, ingest_run_id: str) -> dict:
     session_id = f"polar_{metadata['start_utc'].strftime('%Y%m%d_%H%M%S')}"
 
     # Try to match to Concept2 workout
-    workout_id = match_to_concept2_workout(metadata["start_utc"], metadata["end_utc"])
-    if workout_id:
-        log.info(f"Matched to Concept2 workout: {workout_id}")
+    workout_id, workout_start_utc = match_to_concept2_workout(metadata["start_utc"], metadata["end_utc"])
+    
+    # Calculate offset if matched (workout_start - polar_start)
+    # If workout started 30s after polar, offset = 30s
+    offset_sec = 0
+    if workout_id and workout_start_utc:
+        offset_sec = (workout_start_utc - metadata["start_utc"]).total_seconds()
+        log.info(f"Matched to Concept2 workout: {workout_id} (offset: {offset_sec:.1f}s)")
 
     counts = {"rr": 0, "sessions": 0, "respiratory": 0}
 
@@ -242,12 +274,16 @@ def ingest_polar_file(file_path: Path, ingest_run_id: str) -> dict:
         for i, row in rr_data.iterrows():
             rr_ms = int(row["rr"])
             cumulative_ms += rr_ms
+            
+            # Adjusted time relative to workout start (in ms)
+            time_relative_ms = int((row["time_sec"] - offset_sec) * 1000)
+            
             rr_records.append(
                 {
                     "workout_id": workout_id or session_id,
-                    "workout_start_utc": metadata["start_utc"],
+                    "workout_start_utc": workout_start_utc or metadata["start_utc"],
                     "beat_number": len(rr_records) + 1,
-                    "time_cumulative_ms": cumulative_ms,
+                    "time_cumulative_ms": time_relative_ms,
                     "rr_interval_ms": rr_ms,
                     "hr_instantaneous": 60000 / rr_ms if rr_ms > 0 else None,
                     "source": "Polar_H10",
@@ -275,6 +311,7 @@ def ingest_polar_file(file_path: Path, ingest_run_id: str) -> dict:
     session_record = {
         "session_id": session_id,
         "workout_id": workout_id,
+        "workout_offset_sec": float(offset_sec) if workout_id else None,
         "start_time_utc": metadata["start_utc"],
         "end_time_utc": metadata["end_utc"],
         "duration_sec": float(metadata["duration_sec"]),
@@ -307,6 +344,12 @@ def ingest_polar_file(file_path: Path, ingest_run_id: str) -> dict:
     if len(resp_df) > 0:
         resp_df["session_id"] = session_id
         resp_df["workout_id"] = workout_id
+        
+        # Adjust windows relative to workout start
+        resp_df["window_start_sec"] = resp_df["window_start_sec"] - offset_sec
+        resp_df["window_end_sec"] = resp_df["window_end_sec"] - offset_sec
+        resp_df["window_center_min"] = (resp_df["window_start_sec"] + (resp_df["window_end_sec"] - resp_df["window_start_sec"])/2) / 60
+        
         resp_df["derivation_method"] = "edr"
         resp_df["source"] = "Polar_H10"
         resp_df["ingest_time_utc"] = now_utc
@@ -315,9 +358,13 @@ def ingest_polar_file(file_path: Path, ingest_run_id: str) -> dict:
 
         # Add concurrent HR from RR data
         for idx, row in resp_df.iterrows():
+            # Use original unadjusted time for lookup within RR data
+            orig_start = row["window_start_sec"] + offset_sec
+            orig_end = row["window_end_sec"] + offset_sec
+            
             window_rr = rr_data[
-                (rr_data["time_sec"] >= row["window_start_sec"])
-                & (rr_data["time_sec"] <= row["window_end_sec"])
+                (rr_data["time_sec"] >= orig_start)
+                & (rr_data["time_sec"] <= orig_end)
             ]["rr"]
             if len(window_rr) > 0:
                 resp_df.at[idx, "avg_hr"] = 60000 / window_rr.mean()

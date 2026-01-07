@@ -200,25 +200,34 @@ class Concept2Client:
 
 
 def process_workout_summary(workout_json: dict, ingest_run_id: str) -> dict:
+    # IMPORTANT: Concept2 API 'date' field represents the FINISH time, not start time.
+    # We calculate start times by subtracting duration from the finish time.
     timestamp_str = workout_json["date"]
     tz_name = workout_json["timezone"]
 
-    start_utc, start_local, tz = apply_strategy_b(timestamp_str, tz_name)
+    # Parse the finish time from the API
+    end_utc, end_local, tz = apply_strategy_b(timestamp_str, tz_name)
 
-    end_utc = None
-    end_local = None
-    duration_in_seconds = None # Initialize
+    start_utc = None
+    start_local = None
+    duration_in_seconds = None
     if workout_json.get("time") is not None:
         duration_in_deciseconds = workout_json.get("time")
         duration_in_seconds = duration_in_deciseconds / 10.0
-        
-        # Calculate end times and round to microseconds to prevent ArrowInvalid
-        # errors caused by nanosecond-level floating point noise.
-        end_utc_raw = start_utc + pd.Timedelta(seconds=duration_in_seconds)
-        end_local_raw = start_local + pd.Timedelta(seconds=duration_in_seconds)
-        
-        end_utc = end_utc_raw.round("us")
-        end_local = end_local_raw.round("us")
+
+        # Calculate start times by subtracting duration from end time
+        # Round to microseconds to prevent ArrowInvalid errors from nanosecond noise.
+        start_utc_raw = end_utc - pd.Timedelta(seconds=duration_in_seconds)
+        start_local_raw = end_local - pd.Timedelta(seconds=duration_in_seconds)
+
+        start_utc = start_utc_raw.round("us")
+        start_local = start_local_raw.round("us")
+        end_utc = end_utc.round("us")
+        end_local = end_local.round("us")
+    else:
+        # No duration - use end time as start (single point in time)
+        start_utc = end_utc
+        start_local = end_local
 
     erg_type = workout_json.get("type", "rower").strip().lower()
     workout_type = ERG_TYPE_MAP.get(erg_type, "Rowing")

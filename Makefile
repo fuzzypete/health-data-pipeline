@@ -490,6 +490,17 @@ deploy.refresh:
 	@cp -r Data/Parquet/lactate deploy/data/
 	@cp -r Data/Parquet/protocol_history deploy/data/
 	@cp -r Data/Parquet/cardio_strokes deploy/data/
+	@cp -r Data/Parquet/polar_sessions deploy/data/
+	@cp -r Data/Parquet/polar_rr deploy/data/
+	@cp -r Data/Parquet/polar_respiratory deploy/data/
+	@# Copy latest weekly report if exists
+	@latest_report=$$(ls -t analysis/outputs/weekly_report_*.md 2>/dev/null | head -1); \
+	if [ -n "$$latest_report" ]; then \
+		cp "$$latest_report" deploy/data/weekly_report.md; \
+		echo "✅ Weekly report copied: $$latest_report"; \
+	else \
+		echo "⚠️  No weekly report found (run 'make training.weekly' first)"; \
+	fi
 	@echo "✅ deploy/data refreshed"
 
 # ============================================================================

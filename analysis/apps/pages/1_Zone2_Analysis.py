@@ -278,6 +278,9 @@ col1, col2 = st.columns(2)
 
 with col1:
     if cardiac_drift.get('drift_pct') is not None:
+        excluded = cardiac_drift.get('excluded_samples', 0)
+        excluded_note = f" ({excluded} pause samples excluded)" if excluded > 0 else ""
+
         st.markdown(f"""
         **Overall Drift:** {cardiac_drift['drift_bpm']:+.1f} bpm ({cardiac_drift['drift_pct']:+.1f}%)
 
@@ -285,8 +288,10 @@ with col1:
 
         | Period | HR | Power |
         |--------|-----|-------|
-        | Early ({cardiac_drift['early_period']}) | {cardiac_drift['early_hr']:.0f} bpm | {cardiac_drift['early_watts']:.0f}W |
-        | Late ({cardiac_drift['late_period']}) | {cardiac_drift['late_hr']:.0f} bpm | {cardiac_drift['late_watts']:.0f}W |
+        | 1st Half ({cardiac_drift['early_period']}) | {cardiac_drift['early_hr']:.0f} bpm | {cardiac_drift['early_watts']:.0f}W |
+        | 2nd Half ({cardiac_drift['late_period']}) | {cardiac_drift['late_hr']:.0f} bpm | {cardiac_drift['late_watts']:.0f}W |
+
+        *{excluded_note}*
         """)
     else:
         st.info(f"Drift calculation: {cardiac_drift.get('status', 'N/A')}")

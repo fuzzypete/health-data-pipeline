@@ -404,6 +404,230 @@ def query_lift_maxes(
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=3600)
+def query_weekly_volume(
+    start_date: datetime,
+    end_date: datetime,
+) -> pd.DataFrame:
+    """Query weekly training volume (sets, reps, total lbs)."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            DATE_TRUNC('week', workout_start_utc)::DATE as week_start,
+            COUNT(DISTINCT workout_start_utc::DATE) as sessions,
+            COUNT(*) as total_sets,
+            SUM(actual_reps) as total_reps,
+            SUM(weight_lbs * actual_reps) as total_volume_lbs
+        FROM read_parquet('{_parquet_path("resistance_sets")}')
+        WHERE workout_start_utc::DATE BETWEEN '{start_date.date()}' AND '{end_date.date()}'
+        GROUP BY DATE_TRUNC('week', workout_start_utc)
+        ORDER BY week_start
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying weekly volume: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_volume_by_exercise(
+    start_date: datetime,
+    end_date: datetime,
+) -> pd.DataFrame:
+    """Query volume breakdown by exercise for muscle group analysis."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            exercise_name,
+            COUNT(DISTINCT workout_start_utc::DATE) as sessions,
+            COUNT(*) as total_sets,
+            SUM(actual_reps) as total_reps,
+            SUM(weight_lbs * actual_reps) as total_volume_lbs,
+            MAX(weight_lbs) as max_weight,
+            AVG(weight_lbs) as avg_weight
+        FROM read_parquet('{_parquet_path("resistance_sets")}')
+        WHERE workout_start_utc::DATE BETWEEN '{start_date.date()}' AND '{end_date.date()}'
+          AND weight_lbs IS NOT NULL
+        GROUP BY exercise_name
+        ORDER BY total_sets DESC
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying volume by exercise: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_exercise_progression(
+    start_date: datetime,
+    end_date: datetime,
+    exercise: str,
+) -> pd.DataFrame:
+    """Query detailed progression data for a specific exercise."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            workout_start_utc::DATE as workout_date,
+            MAX(weight_lbs) as max_weight,
+            AVG(weight_lbs) as avg_weight,
+            AVG(actual_reps) as avg_reps,
+            COUNT(*) as sets,
+            SUM(weight_lbs * actual_reps) as volume_lbs
+        FROM read_parquet('{_parquet_path("resistance_sets")}')
+        WHERE workout_start_utc::DATE BETWEEN '{start_date.date()}' AND '{end_date.date()}'
+          AND exercise_name = '{exercise}'
+          AND weight_lbs IS NOT NULL
+        GROUP BY workout_start_utc::DATE
+        ORDER BY workout_date
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying exercise progression: {e}")
+        return pd.DataFrame()
+
+
+# =============================================================================
+# Polar H10 & VO2 Queries
+# =============================================================================
+
+
+@st.cache_data(ttl=3600)
+def get_workouts_with_polar(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> pd.DataFrame:
+    """Get all workouts that have associated Polar session data."""
+    conn = get_connection()
+
+    date_filter = ""
+    if start_date and end_date:
+        date_filter = f"AND w.start_time_utc BETWEEN '{start_date.isoformat()}' AND '{end_date.isoformat()}'"
+
+    query = f"""
+        SELECT
+            w.workout_id,
+            w.start_time_utc,
+            w.start_time_utc::DATE as workout_date,
+            w.erg_type,
+            w.duration_s / 60.0 as duration_min,
+            w.avg_hr_bpm,
+            w.max_hr_bpm,
+            p.session_id,
+            p.avg_hr as polar_avg_hr,
+            p.rmssd_ms
+        FROM read_parquet('{_parquet_path("workouts")}') w
+        JOIN read_parquet('{_parquet_path("polar_sessions")}') p ON w.workout_id = p.workout_id
+        WHERE w.erg_type IS NOT NULL
+        {date_filter}
+        ORDER BY w.start_time_utc DESC
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying workouts with Polar data: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def get_vo2_interval_sessions(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    min_max_hr: int = 135,
+) -> pd.DataFrame:
+    """
+    Get workouts with Polar data that are likely VO2 interval sessions.
+    
+    Filters by intensity (Max HR) to exclude Zone 2 work.
+    """
+    df = get_workouts_with_polar(start_date, end_date)
+    if not df.empty and "max_hr_bpm" in df.columns:
+        return df[df["max_hr_bpm"] >= min_max_hr].copy()
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_polar_sessions(
+    start_date: datetime,
+    end_date: datetime,
+) -> pd.DataFrame:
+    """Query Polar H10 session summaries."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            session_id,
+            workout_id,
+            start_time_utc,
+            duration_sec,
+            avg_hr,
+            max_hr,
+            rmssd_ms,
+            sdnn_ms,
+            source_file
+        FROM read_parquet('{_parquet_path("polar_sessions")}')
+        WHERE start_time_utc BETWEEN '{start_date.isoformat()}' AND '{end_date.isoformat()}'
+        ORDER BY start_time_utc DESC
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying Polar sessions: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_polar_respiratory(workout_id: str) -> pd.DataFrame:
+    """Query respiratory rate data for a specific workout."""
+    conn = get_connection()
+
+    query = f"""
+        SELECT
+            window_center_min,
+            respiratory_rate,
+            avg_hr,
+            confidence
+        FROM read_parquet('{_parquet_path("polar_respiratory")}')
+        WHERE workout_id = '{workout_id}'
+        ORDER BY window_center_min
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        # Try session_id if workout_id not found or query fails
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def get_vo2_analysis(workout_id: str) -> dict:
+    """Get high-confidence 3-gate VO2 stimulus analysis for a workout."""
+    try:
+        from pipeline.analysis.vo2_overlap import analyze_vo2_session_3gate
+        from pipeline.analysis.vo2_baseline import get_gate2_params
+        
+        # Get dynamic Z2 params for this environment
+        params = get_gate2_params(data_path=str(PARQUET_ROOT))
+        
+        return analyze_vo2_session_3gate(
+            workout_id, 
+            data_path=str(PARQUET_ROOT),
+            **params
+        )
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # =============================================================================
 # Minute Facts / Daily Summary Queries
 # =============================================================================
@@ -600,6 +824,7 @@ def get_recovery_score_data() -> dict:
     result = {}
 
     # Get latest Oura data (sleep, HRV, RHR)
+    # Filter for non-null HRV to ensure we get a completed night's data
     try:
         oura_query = f"""
             SELECT
@@ -608,6 +833,7 @@ def get_recovery_score_data() -> dict:
                 hrv_ms,
                 resting_heart_rate_bpm
             FROM read_parquet('{_parquet_path("oura_summary")}')
+            WHERE hrv_ms IS NOT NULL
             ORDER BY day DESC
             LIMIT 1
         """
@@ -874,8 +1100,6 @@ def get_cardio_score_data() -> dict:
             result["current_efficiency"] = None
     except Exception:
         result["best_efficiency"] = 1.0
-        result["current_efficiency"] = None
-
     # Resting HR and HRV from Oura
     try:
         oura_query = f"""
@@ -883,6 +1107,7 @@ def get_cardio_score_data() -> dict:
                 resting_heart_rate_bpm,
                 hrv_ms
             FROM read_parquet('{_parquet_path("oura_summary")}')
+            WHERE resting_heart_rate_bpm IS NOT NULL
             ORDER BY day DESC
             LIMIT 1
         """
@@ -984,6 +1209,7 @@ def get_vitals_score_data() -> dict:
                 resting_heart_rate_bpm,
                 hrv_ms
             FROM read_parquet('{_parquet_path("oura_summary")}')
+            WHERE resting_heart_rate_bpm IS NOT NULL
             ORDER BY day DESC
             LIMIT 1
         """
@@ -1464,10 +1690,11 @@ def calculate_cardiac_drift(stroke_df: pd.DataFrame, workout_duration_min: float
     Calculate cardiac drift for a workout.
 
     Cardiac drift = increase in HR over time at constant power.
-    Measured as % increase in HR from first 10 min to last 10 min.
+    Compares average HR of first half vs second half of session,
+    excluding periods where power drops (lactate reading pauses).
 
     Args:
-        stroke_df: Stroke-level data
+        stroke_df: Stroke-level data with elapsed_min, heart_rate_bpm, watts
         workout_duration_min: Total workout duration
 
     Returns:
@@ -1476,46 +1703,60 @@ def calculate_cardiac_drift(stroke_df: pd.DataFrame, workout_duration_min: float
     if stroke_df.empty or workout_duration_min < 20:
         return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient data"}
 
-    # First 10 minutes (after 2 min warmup)
-    early_mask = (stroke_df["elapsed_min"] >= 2) & (stroke_df["elapsed_min"] <= 12)
-    early_data = stroke_df[early_mask]
+    # Filter out power drops (pauses for lactate readings)
+    # Power drops are typically <50% of session median power
+    median_power = stroke_df["watts"].median()
+    power_threshold = median_power * 0.5  # Below 50% of median = pause
+    active_df = stroke_df[stroke_df["watts"] >= power_threshold].copy()
 
-    # Last 10 minutes
-    late_start = max(workout_duration_min - 10, 15)
-    late_mask = stroke_df["elapsed_min"] >= late_start
-    late_data = stroke_df[late_mask]
+    if len(active_df) < 20:
+        return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient active data"}
 
-    if early_data.empty or late_data.empty:
-        return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient data"}
+    # Skip warmup (first 2 minutes)
+    active_df = active_df[active_df["elapsed_min"] >= 2]
 
-    # Calculate averages
-    early_hr = early_data["heart_rate_bpm"].mean()
-    late_hr = late_data["heart_rate_bpm"].mean()
-    early_watts = early_data["watts"].mean()
-    late_watts = late_data["watts"].mean()
+    if active_df.empty:
+        return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient data after warmup"}
 
-    # Only calculate drift if power is relatively constant (within 10%)
-    power_change_pct = abs(late_watts - early_watts) / early_watts * 100 if early_watts > 0 else 100
+    # Split into first half and second half
+    midpoint = (active_df["elapsed_min"].min() + active_df["elapsed_min"].max()) / 2
+
+    first_half = active_df[active_df["elapsed_min"] < midpoint]
+    second_half = active_df[active_df["elapsed_min"] >= midpoint]
+
+    if first_half.empty or second_half.empty:
+        return {"drift_pct": None, "drift_bpm": None, "status": "Insufficient data for halves"}
+
+    # Calculate averages for each half
+    first_half_hr = first_half["heart_rate_bpm"].mean()
+    second_half_hr = second_half["heart_rate_bpm"].mean()
+    first_half_watts = first_half["watts"].mean()
+    second_half_watts = second_half["watts"].mean()
+
+    # Check power consistency between halves
+    power_change_pct = abs(second_half_watts - first_half_watts) / first_half_watts * 100 if first_half_watts > 0 else 100
 
     if power_change_pct > 15:
         return {
             "drift_pct": None,
             "drift_bpm": None,
             "status": f"Power not constant ({power_change_pct:.0f}% change)",
-            "early_hr": round(early_hr, 1),
-            "late_hr": round(late_hr, 1),
-            "early_watts": round(early_watts, 1),
-            "late_watts": round(late_watts, 1),
+            "early_hr": round(first_half_hr, 1),
+            "late_hr": round(second_half_hr, 1),
+            "early_watts": round(first_half_watts, 1),
+            "late_watts": round(second_half_watts, 1),
         }
 
-    drift_bpm = late_hr - early_hr
-    drift_pct = (drift_bpm / early_hr) * 100 if early_hr > 0 else 0
+    # Calculate drift
+    drift_bpm = second_half_hr - first_half_hr
+    drift_pct = (drift_bpm / first_half_hr) * 100 if first_half_hr > 0 else 0
 
     # Normalize to per-hour rate
-    time_span_hr = (workout_duration_min - 12) / 60  # Approximate time span
+    active_duration_min = active_df["elapsed_min"].max() - active_df["elapsed_min"].min()
+    time_span_hr = active_duration_min / 60
     drift_per_hour = drift_pct / time_span_hr if time_span_hr > 0 else drift_pct
 
-    # Status based on drift
+    # Status based on drift per hour
     if drift_per_hour < 3:
         status = "Excellent"
     elif drift_per_hour < 5:
@@ -1525,17 +1766,25 @@ def calculate_cardiac_drift(stroke_df: pd.DataFrame, workout_duration_min: float
     else:
         status = "High"
 
+    # Period labels
+    first_half_start = first_half["elapsed_min"].min()
+    first_half_end = first_half["elapsed_min"].max()
+    second_half_start = second_half["elapsed_min"].min()
+    second_half_end = second_half["elapsed_min"].max()
+
     return {
         "drift_pct": round(drift_pct, 1),
         "drift_bpm": round(drift_bpm, 1),
         "drift_per_hour_pct": round(drift_per_hour, 1),
         "status": status,
-        "early_hr": round(early_hr, 1),
-        "late_hr": round(late_hr, 1),
-        "early_watts": round(early_watts, 1),
-        "late_watts": round(late_watts, 1),
-        "early_period": "2-12 min",
-        "late_period": f"{late_start:.0f}-{workout_duration_min:.0f} min",
+        "early_hr": round(first_half_hr, 1),
+        "late_hr": round(second_half_hr, 1),
+        "early_watts": round(first_half_watts, 1),
+        "late_watts": round(second_half_watts, 1),
+        "early_period": f"{first_half_start:.0f}-{first_half_end:.0f} min",
+        "late_period": f"{second_half_start:.0f}-{second_half_end:.0f} min",
+        "excluded_samples": len(stroke_df) - len(active_df),
+        "power_threshold": round(power_threshold, 0),
     }
 
 

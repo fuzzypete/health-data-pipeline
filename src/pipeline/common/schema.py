@@ -468,6 +468,7 @@ polar_session_schema = pa.schema([
     # Linkage (can be linked to Concept2 workout_id if timestamps align)
     pa.field("session_id", pa.string(), nullable=False),
     pa.field("workout_id", pa.string(), nullable=True),  # Linked Concept2 workout if matched
+    pa.field("workout_offset_sec", pa.float32(), nullable=True),
     pa.field("start_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("end_time_utc", pa.timestamp("us", tz="UTC"), nullable=False),
     pa.field("duration_sec", pa.float32(), nullable=False),

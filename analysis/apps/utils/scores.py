@@ -14,6 +14,7 @@ All scores are 0-100 scale with status thresholds:
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -87,7 +88,7 @@ def get_vitals_status(score: int) -> tuple[str, str]:
 # Peter's Recovery Score (PRS) - Component Calculations
 # =============================================================================
 
-def calc_sleep_duration_score(hours: float, target: float = 7.5) -> int:
+def calc_sleep_duration_score(hours: float | None, target: float = 7.5) -> int:
     """
     Sleep duration score.
 
@@ -98,7 +99,7 @@ def calc_sleep_duration_score(hours: float, target: float = 7.5) -> int:
     Returns:
         Score 0-100
     """
-    if hours <= 0:
+    if hours is None or (isinstance(hours, float) and math.isnan(hours)) or hours <= 0:
         return 0
     return min(100, int((hours / target) * 100))
 
@@ -113,7 +114,7 @@ def calc_sleep_efficiency_score(efficiency_pct: float) -> int:
     Returns:
         Score 0-100
     """
-    if efficiency_pct is None:
+    if efficiency_pct is None or (isinstance(efficiency_pct, float) and math.isnan(efficiency_pct)):
         return 50  # Neutral if missing
     return min(100, max(0, int(efficiency_pct)))
 
@@ -128,6 +129,9 @@ def calc_sleep_debt_score(debt_hours: float) -> int:
     Returns:
         Score 0-100 (more debt = lower score)
     """
+    if debt_hours is None or (isinstance(debt_hours, float) and math.isnan(debt_hours)):
+        return 50 # Neutral if unknown
+
     # Each hour of debt costs 20 points
     # Max penalty at 5+ hours of debt
     return max(0, int(100 - (abs(debt_hours) * 20)))
@@ -147,7 +151,7 @@ def calc_hrv_vs_baseline_score(current_hrv: float, baseline_hrv: float) -> int:
         - >120% of baseline = 100 points (cap)
         - <60% of baseline = 0 points
     """
-    if baseline_hrv <= 0 or current_hrv is None:
+    if baseline_hrv <= 0 or current_hrv is None or (isinstance(current_hrv, float) and math.isnan(current_hrv)):
         return 50  # Neutral if no baseline
 
     ratio = current_hrv / baseline_hrv
@@ -175,7 +179,7 @@ def calc_rhr_vs_baseline_score(current_rhr: float, baseline_rhr: float) -> int:
         - 5+ bpm below baseline = 100 points
         - 10+ bpm above baseline = 0 points
     """
-    if baseline_rhr <= 0 or current_rhr is None:
+    if baseline_rhr <= 0 or current_rhr is None or (isinstance(current_rhr, float) and math.isnan(current_rhr)):
         return 50  # Neutral if no baseline
 
     diff = current_rhr - baseline_rhr
@@ -203,7 +207,7 @@ def calc_acwr_score(acute_load: float, chronic_load: float) -> int:
     Returns:
         Score 0-100
     """
-    if chronic_load <= 0:
+    if chronic_load <= 0 or (isinstance(acute_load, float) and math.isnan(acute_load)):
         return 50  # No baseline, neutral score
 
     acwr = acute_load / chronic_load
@@ -373,7 +377,7 @@ def calc_max_hr_score(recent_max_hr: int, peak_max_hr: int = PEAK_MAX_HR) -> int
     Returns:
         Score 0-100
     """
-    if recent_max_hr <= 0:
+    if recent_max_hr <= 0 or (isinstance(recent_max_hr, float) and math.isnan(recent_max_hr)):
         return 0
     return min(100, int((recent_max_hr / peak_max_hr) * 100))
 
@@ -392,7 +396,7 @@ def calc_zone2_power_score(
     Returns:
         Score 0-100
     """
-    if current_z2_watts <= 0:
+    if current_z2_watts <= 0 or (isinstance(current_z2_watts, float) and math.isnan(current_z2_watts)):
         return 0
     return min(100, int((current_z2_watts / peak_z2_watts) * 100))
 
@@ -411,7 +415,7 @@ def calc_hr_response_score(minutes_to_140: float) -> int:
         - 8-12 min = linear 50 -> 0
         - >12 min = 0
     """
-    if minutes_to_140 is None:
+    if minutes_to_140 is None or (isinstance(minutes_to_140, float) and math.isnan(minutes_to_140)):
         return 50  # Unknown
 
     if minutes_to_140 <= 4:
@@ -437,7 +441,7 @@ def calc_hr_recovery_score(hr_drop_1min: int | None) -> int:
         - 20-30 bpm = linear 50-100
         - <15 bpm = 0 (poor recovery)
     """
-    if hr_drop_1min is None:
+    if hr_drop_1min is None or (isinstance(hr_drop_1min, float) and math.isnan(hr_drop_1min)):
         return 50  # Unknown
 
     if hr_drop_1min >= 30:
@@ -464,7 +468,7 @@ def calc_aerobic_efficiency_score(
     Returns:
         Score 0-100
     """
-    if best_efficiency <= 0 or current_efficiency is None:
+    if best_efficiency <= 0 or current_efficiency is None or (isinstance(current_efficiency, float) and math.isnan(current_efficiency)):
         return 50
     return min(100, int((current_efficiency / best_efficiency) * 100))
 
@@ -479,7 +483,7 @@ def calc_cardio_rhr_score(resting_hr: int) -> int:
     Returns:
         Score 0-100
     """
-    if resting_hr is None:
+    if resting_hr is None or (isinstance(resting_hr, float) and math.isnan(resting_hr)):
         return 50
 
     if resting_hr < 50:
@@ -613,6 +617,8 @@ def calc_bp_score(systolic: float, diastolic: float) -> int:
     """
     if systolic is None or diastolic is None:
         return 50
+    if (isinstance(systolic, float) and math.isnan(systolic)) or (isinstance(diastolic, float) and math.isnan(diastolic)):
+        return 50
 
     if systolic > 180 or diastolic > 120:
         return 0  # Hypertensive crisis
@@ -636,7 +642,7 @@ def calc_vitals_rhr_score(resting_hr: int | None) -> int:
     Returns:
         Score 0-100
     """
-    if resting_hr is None:
+    if resting_hr is None or (isinstance(resting_hr, float) and math.isnan(resting_hr)):
         return 50
 
     if resting_hr < 50:
@@ -665,7 +671,7 @@ def calc_spo2_score(spo2: float | None) -> int:
     Returns:
         Score 0-100
     """
-    if spo2 is None:
+    if spo2 is None or (isinstance(spo2, float) and math.isnan(spo2)):
         return 50
 
     if spo2 >= 98:
@@ -693,7 +699,7 @@ def calc_respiratory_rate_score(breaths_per_min: float | None) -> int:
     Returns:
         Score 0-100
     """
-    if breaths_per_min is None:
+    if breaths_per_min is None or (isinstance(breaths_per_min, float) and math.isnan(breaths_per_min)):
         return 50
 
     if 12 <= breaths_per_min <= 16:
@@ -784,7 +790,7 @@ def calc_vo2max_score(vo2max: float, age: int = 56) -> dict:
     Returns:
         Dict with score, category, percentile, value
     """
-    if vo2max is None or vo2max <= 0:
+    if vo2max is None or vo2max <= 0 or (isinstance(vo2max, float) and math.isnan(vo2max)):
         return {
             "score": 0,
             "category": "Unknown",
@@ -846,6 +852,10 @@ def calc_glucose_score(
     Returns:
         Score 0-100
     """
+    # Check for NaNs
+    if math.isnan(time_in_range_pct) or math.isnan(avg_glucose) or math.isnan(coefficient_of_variation):
+        return 0
+
     # Time in range score (target >70%)
     if time_in_range_pct >= 85:
         tir_score = 100

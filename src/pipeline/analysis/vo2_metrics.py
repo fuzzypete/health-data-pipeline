@@ -200,10 +200,11 @@ def calculate_respiratory_vo2_metrics(
     # High respiratory rate windows
     high_resp = work_resp[work_resp["respiratory_rate"] >= high_resp_threshold]
 
-    # Estimate time in high resp zone (assuming 15-30s windows)
-    # Each window represents ~15-30 seconds depending on step size
-    window_duration_min = 0.5  # Approximate
-    vo2_stimulus_min = len(high_resp) * window_duration_min
+    # Estimate time in high resp zone
+    # Windows are 30s long with 15s step (50% overlap)
+    # Contribution of each window is the step size (15s = 0.25 min)
+    step_duration_min = 0.25
+    vo2_stimulus_min = len(high_resp) * step_duration_min
 
     # Time to first high respiratory rate
     if not high_resp.empty:
@@ -224,6 +225,7 @@ def analyze_vo2_session(
     workout_id: str,
     warmup_min: float = 10.0,
     interval_duration: float = 30.0,
+    data_path: str = "Data/Parquet",
 ) -> dict:
     """
     Comprehensive VO₂ session analysis combining HR drop and respiratory rate.
@@ -232,6 +234,7 @@ def analyze_vo2_session(
         workout_id: Concept2 workout ID
         warmup_min: Warmup duration in minutes
         interval_duration: Interval duration in seconds (30 for 30/30)
+        data_path: Path to Parquet data root (e.g., 'deploy/data' or 'Data/Parquet')
 
     Returns:
         dict with comprehensive VO₂ metrics
@@ -242,7 +245,7 @@ def analyze_vo2_session(
     strokes = con.execute(
         f"""
         SELECT time_cumulative_s, heart_rate_bpm
-        FROM read_parquet('Data/Parquet/cardio_strokes/**/*.parquet')
+        FROM read_parquet('{data_path}/cardio_strokes/**/*.parquet')
         WHERE workout_id = '{workout_id}'
           AND heart_rate_bpm IS NOT NULL
         ORDER BY time_cumulative_s
@@ -254,7 +257,7 @@ def analyze_vo2_session(
         resp = con.execute(
             f"""
             SELECT window_center_min, respiratory_rate, avg_hr
-            FROM read_parquet('Data/Parquet/polar_respiratory/**/*.parquet')
+            FROM read_parquet('{data_path}/polar_respiratory/**/*.parquet')
             WHERE workout_id = '{workout_id}'
             ORDER BY window_center_min
         """
@@ -310,7 +313,7 @@ def analyze_vo2_session(
     }
 
 
-def query_weekly_vo2_metrics(end_date: datetime, days: int = 7) -> dict:
+def query_weekly_vo2_metrics(end_date: datetime, days: int = 7, data_path: str = "Data/Parquet") -> dict:
     """
     Query VO₂ metrics for the past N days.
 
@@ -324,7 +327,7 @@ def query_weekly_vo2_metrics(end_date: datetime, days: int = 7) -> dict:
     workouts = con.execute(
         f"""
         SELECT workout_id, start_time_utc, duration_s
-        FROM read_parquet('Data/Parquet/workouts/**/*.parquet')
+        FROM read_parquet('{data_path}/workouts/**/*.parquet')
         WHERE source = 'Concept2'
           AND start_time_utc >= '{start_date}'
           AND start_time_utc <= '{end_date}'
@@ -338,7 +341,7 @@ def query_weekly_vo2_metrics(end_date: datetime, days: int = 7) -> dict:
     all_sessions = []
 
     for _, workout in workouts.iterrows():
-        metrics = analyze_vo2_session(workout["workout_id"])
+        metrics = analyze_vo2_session(workout["workout_id"], data_path=data_path)
         all_sessions.append(metrics)
 
         if metrics["vo2_stimulus_min"]:
@@ -356,13 +359,13 @@ def query_weekly_vo2_metrics(end_date: datetime, days: int = 7) -> dict:
     }
 
 
-def compare_hr_drop_vs_respiratory(workout_id: str) -> pd.DataFrame:
+def compare_hr_drop_vs_respiratory(workout_id: str, data_path: str = "Data/Parquet") -> pd.DataFrame:
     """
     Compare HR drop and respiratory rate metrics for validation.
 
     Returns DataFrame with interval-by-interval comparison.
     """
-    metrics = analyze_vo2_session(workout_id)
+    metrics = analyze_vo2_session(workout_id, data_path=data_path)
 
     if not metrics["respiratory"]["has_data"]:
         return pd.DataFrame({"error": ["No respiratory data available"]})
@@ -374,7 +377,7 @@ def compare_hr_drop_vs_respiratory(workout_id: str) -> pd.DataFrame:
     resp = con.execute(
         f"""
         SELECT window_center_min, respiratory_rate
-        FROM read_parquet('Data/Parquet/polar_respiratory/**/*.parquet')
+        FROM read_parquet('{data_path}/polar_respiratory/**/*.parquet')
         WHERE workout_id = '{workout_id}'
         ORDER BY window_center_min
     """

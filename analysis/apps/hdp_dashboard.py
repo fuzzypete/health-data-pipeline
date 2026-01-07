@@ -544,13 +544,20 @@ def render_hero_kpis(start_date: datetime, end_date: datetime):
             start_date=datetime.now() - timedelta(days=7),
             end_date=datetime.now()
         )
+        # Helper to get latest valid value
+        def get_latest_valid(df, col):
+            if df.empty or col not in df.columns:
+                return None
+            valid = df[df[col].notna()]
+            return valid.iloc[-1][col] if not valid.empty else None
+
         if not oura_data.empty and "hrv_ms" in oura_data.columns:
-            latest_hrv = oura_data.iloc[-1]["hrv_ms"]
+            latest_hrv = get_latest_valid(oura_data, "hrv_ms")
             avg_hrv = oura_data["hrv_ms"].mean()
             if pd.notna(latest_hrv):
                 delta_pct = ((latest_hrv - avg_hrv) / avg_hrv * 100) if avg_hrv > 0 else 0
                 st.metric(
-                    "HRV (today)",
+                    "HRV (latest)",
                     f"{latest_hrv:.0f} ms",
                     delta=f"{delta_pct:+.1f}% vs 7d avg",
                 )
@@ -562,7 +569,7 @@ def render_hero_kpis(start_date: datetime, end_date: datetime):
     # KPI 5: Sleep Score
     with cols2[1]:
         if not oura_data.empty and "sleep_score" in oura_data.columns:
-            latest_sleep = oura_data.iloc[-1]["sleep_score"]
+            latest_sleep = get_latest_valid(oura_data, "sleep_score")
             if pd.notna(latest_sleep):
                 status = "optimal" if latest_sleep >= 85 else "good" if latest_sleep >= 70 else "warning"
                 st.metric("Sleep Score", f"{latest_sleep:.0f}")
@@ -574,7 +581,7 @@ def render_hero_kpis(start_date: datetime, end_date: datetime):
     # KPI 6: Readiness
     with cols2[2]:
         if not oura_data.empty and "readiness_score" in oura_data.columns:
-            latest_readiness = oura_data.iloc[-1]["readiness_score"]
+            latest_readiness = get_latest_valid(oura_data, "readiness_score")
             if pd.notna(latest_readiness):
                 st.metric("Readiness", f"{latest_readiness:.0f}")
             else:
@@ -667,7 +674,7 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
         st.plotly_chart(fig, use_container_width=True)
 
         # Summary metrics
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             avg_watts = zone2_workouts["avg_watts"].mean()
             st.metric("Avg Z2 Power", f"{avg_watts:.0f}W")
@@ -677,6 +684,22 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
         with col3:
             workouts_count = len(zone2_workouts)
             st.metric("Z2 Sessions", f"{workouts_count}")
+        with col4:
+            # Latest VO2 stimulus from Polar data if available
+            try:
+                from utils.queries import query_polar_sessions, get_vo2_analysis
+                polar_sessions = query_polar_sessions(start_date, end_date)
+                if not polar_sessions.empty and polar_sessions.iloc[0]["workout_id"]:
+                    latest_workout_id = polar_sessions.iloc[0]["workout_id"]
+                    vo2_analysis = get_vo2_analysis(latest_workout_id)
+                    # Get True VO2 time from summary
+                    summary = vo2_analysis.get("summary", {})
+                    stimulus_min = summary.get("true_vo2_time_min", 0)
+                    st.metric("Latest VO2 Stimulus", f"{stimulus_min:.1f} min")
+                else:
+                    st.metric("VO2 Stimulus", "No data")
+            except Exception:
+                st.metric("VO2 Stimulus", "N/A")
 
 
 # =============================================================================
@@ -765,46 +788,234 @@ def render_recovery_section(start_date: datetime, end_date: datetime):
 
 def render_strength_section(start_date: datetime, end_date: datetime):
     """Render the strength training section."""
-    with st.expander("Strength Training", expanded=False):
-        # Key compound lifts
-        key_lifts = ["Barbell Bench Press", "Barbell Squat", "Deadlift", "Overhead Press"]
-        lift_data = query_lift_maxes(start_date, end_date, exercises=key_lifts)
+    from utils.constants import (
+        KEY_LIFTS,
+        EXERCISE_MUSCLE_GROUPS,
+        MUSCLE_GROUP_COLORS,
+        PROGRESSION_STATUS_EMOJI,
+    )
+    from utils.queries import (
+        query_lift_maxes,
+        query_weekly_volume,
+        query_volume_by_exercise,
+    )
 
-        if lift_data.empty:
+    with st.expander("Strength Training", expanded=False):
+        # Query all data
+        lift_data = query_lift_maxes(start_date, end_date, exercises=KEY_LIFTS)
+        weekly_vol = query_weekly_volume(start_date, end_date)
+        exercise_vol = query_volume_by_exercise(start_date, end_date)
+
+        if lift_data.empty and weekly_vol.empty:
             st.info("No strength training data found in this period.")
             return
 
-        # Multi-line chart of lift progression
-        fig = go.Figure()
+        # --- Weekly Summary Metrics ---
+        if not weekly_vol.empty:
+            recent_week = weekly_vol.iloc[-1] if len(weekly_vol) > 0 else None
+            avg_weekly_sets = weekly_vol["total_sets"].mean()
 
-        for lift in key_lifts:
-            lift_subset = lift_data[lift_data["exercise_name"] == lift]
-            if not lift_subset.empty:
-                fig.add_trace(
-                    go.Scatter(
-                        x=lift_subset["workout_date"],
-                        y=lift_subset["max_weight"],
-                        mode="lines+markers",
-                        name=lift,
-                        marker=dict(size=6),
-                        line=dict(width=2),
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                sessions = int(recent_week["sessions"]) if recent_week is not None else 0
+                st.metric("Sessions (This Week)", sessions)
+            with col2:
+                sets = int(recent_week["total_sets"]) if recent_week is not None else 0
+                delta = int(sets - avg_weekly_sets) if avg_weekly_sets else None
+                st.metric("Sets (This Week)", sets, delta=delta if delta else None)
+            with col3:
+                reps = int(recent_week["total_reps"]) if recent_week is not None else 0
+                st.metric("Reps (This Week)", reps)
+            with col4:
+                vol = recent_week["total_volume_lbs"] if recent_week is not None else 0
+                vol_k = vol / 1000 if vol else 0
+                st.metric("Volume (This Week)", f"{vol_k:.1f}K lbs")
+
+        st.markdown("---")
+
+        # --- Key Lift Progression Chart ---
+        st.markdown("#### Key Lift Progression")
+
+        if not lift_data.empty:
+            fig = go.Figure()
+
+            lift_colors = ["#FF6B6B", "#4ECDC4", "#95E1D3", "#FFE66D"]
+            for i, lift in enumerate(KEY_LIFTS):
+                lift_subset = lift_data[lift_data["exercise_name"] == lift]
+                if not lift_subset.empty:
+                    # Shorten name for legend
+                    short_name = lift.replace("Dumbbell ", "DB ").replace("Barbell ", "BB ")
+                    fig.add_trace(
+                        go.Scatter(
+                            x=lift_subset["workout_date"],
+                            y=lift_subset["max_weight"],
+                            mode="lines+markers",
+                            name=short_name,
+                            marker=dict(size=7),
+                            line=dict(width=2, color=lift_colors[i % len(lift_colors)]),
+                        )
                     )
+
+            fig.update_layout(
+                template="plotly_dark",
+                xaxis_title="Date",
+                yaxis_title="Weight (lbs)",
+                hovermode="x unified",
+                height=300,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                margin=dict(l=0, r=0, t=40, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No data for key lifts in this period.")
+
+        # --- Volume by Muscle Group ---
+        st.markdown("#### Volume by Muscle Group")
+
+        if not exercise_vol.empty:
+            # Map exercises to muscle groups
+            exercise_vol["muscle_group"] = exercise_vol["exercise_name"].map(
+                EXERCISE_MUSCLE_GROUPS
+            ).fillna("Other")
+
+            # Aggregate by muscle group
+            mg_vol = (
+                exercise_vol.groupby("muscle_group")
+                .agg({"total_sets": "sum", "total_volume_lbs": "sum"})
+                .reset_index()
+                .sort_values("total_sets", ascending=True)
+            )
+
+            # Bar chart
+            colors = [MUSCLE_GROUP_COLORS.get(mg, "#808080") for mg in mg_vol["muscle_group"]]
+
+            fig_mg = go.Figure()
+            fig_mg.add_trace(
+                go.Bar(
+                    y=mg_vol["muscle_group"],
+                    x=mg_vol["total_sets"],
+                    orientation="h",
+                    marker_color=colors,
+                    text=mg_vol["total_sets"],
+                    textposition="auto",
+                )
+            )
+
+            fig_mg.update_layout(
+                template="plotly_dark",
+                xaxis_title="Total Sets",
+                yaxis_title="",
+                height=250,
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+            )
+
+            st.plotly_chart(fig_mg, use_container_width=True)
+
+        # --- Progress Indicators Table ---
+        st.markdown("#### Exercise Progress")
+
+        if not exercise_vol.empty:
+            # Build progress table from exercise data
+            progress_data = []
+            for _, row in exercise_vol.head(10).iterrows():
+                ex_name = row["exercise_name"]
+                current_wt = row["max_weight"]
+                sessions = row["sessions"]
+
+                # Determine status based on sessions and weight
+                if sessions >= 3:
+                    status = "READY"
+                    action = "+5 lbs"
+                elif sessions <= 2:
+                    status = "PROGRESSING"
+                    action = "Continue"
+                else:
+                    status = "STABLE"
+                    action = "Maintain"
+
+                emoji = PROGRESSION_STATUS_EMOJI.get(status, "⚪")
+
+                # Shorten exercise name for display
+                short_name = ex_name.replace("Dumbbell ", "DB ").replace("Barbell ", "BB ")
+                if len(short_name) > 25:
+                    short_name = short_name[:22] + "..."
+
+                progress_data.append({
+                    "Exercise": short_name,
+                    "Weight": f"{current_wt:.0f} lbs" if current_wt else "BW",
+                    "Sessions": sessions,
+                    "Status": f"{emoji} {status}",
+                    "Action": action,
+                })
+
+            if progress_data:
+                import pandas as pd
+                progress_df = pd.DataFrame(progress_data)
+                st.dataframe(
+                    progress_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(400, 35 * len(progress_data) + 38),
                 )
 
-        fig.update_layout(
-            template="plotly_dark",
-            title="Key Lift Progression",
-            xaxis_title="Date",
-            yaxis_title="Weight (lbs)",
-            hovermode="x unified",
-            height=350,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            margin=dict(l=0, r=0, t=60, b=0),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-        )
 
-        st.plotly_chart(fig, use_container_width=True)
+# =============================================================================
+# Weekly Coach Section
+# =============================================================================
+
+
+def get_weekly_report_path() -> str | None:
+    """Get path to weekly report file (deployed or local)."""
+    from pathlib import Path
+
+    # Project root is 2 levels up from this file (analysis/apps/hdp_dashboard.py)
+    project_root = Path(__file__).parent.parent.parent
+
+    # Check deployed location first (deploy/data/weekly_report.md)
+    deployed_path = project_root / "deploy" / "data" / "weekly_report.md"
+    if deployed_path.exists():
+        return str(deployed_path)
+
+    # Fall back to local outputs (analysis/outputs/weekly_report_*.md)
+    local_dir = project_root / "analysis" / "outputs"
+    if local_dir.exists():
+        reports = sorted(local_dir.glob("weekly_report_*.md"), reverse=True)
+        if reports:
+            return str(reports[0])
+
+    return None
+
+
+def render_weekly_coach_section():
+    """Render the Weekly Coach / Training Plan section."""
+    with st.expander("Weekly Coach", expanded=False):
+        report_path = get_weekly_report_path()
+
+        if not report_path:
+            st.info(
+                "No weekly report found. "
+                "Run `make training.weekly` to generate one."
+            )
+            return
+
+        # Read the report
+        from pathlib import Path
+        report_content = Path(report_path).read_text()
+
+        # Extract generation date from footer
+        import re
+        date_match = re.search(r"Generated (\d{4}-\d{2}-\d{2})", report_content)
+        if date_match:
+            gen_date = date_match.group(1)
+            st.caption(f"Report generated: {gen_date}")
+
+        # Display the markdown report
+        st.markdown(report_content)
 
 
 # =============================================================================
@@ -896,6 +1107,7 @@ def main():
     render_cardiovascular_section(start_date, end_date)
     render_recovery_section(start_date, end_date)
     render_strength_section(start_date, end_date)
+    render_weekly_coach_section()
     render_now_section(start_date, end_date)
 
     # Footer

@@ -73,3 +73,85 @@ RECOVERY_THRESHOLDS = {
     "moderate": 70,
     "compromised": 50,
 }
+
+# =============================================================================
+# Strength Training Constants
+# =============================================================================
+
+# Exercise to muscle group mapping (based on workout_templates.py pools)
+EXERCISE_MUSCLE_GROUPS = {
+    # Upper Push
+    "Dumbbell Bench Press": "Upper Push",
+    "Dumbbell Incline Bench Press": "Upper Push",
+    "Dumbbell Fly": "Upper Push",
+    "Weighted Tricep Dip": "Upper Push",
+    "Dumbbell One-Arm Press (Palms In)": "Upper Push",
+    "Dumbbell Shoulder Press": "Upper Push",
+    "Dumbbell Tricep Extension (Supine)": "Upper Push",
+    "Dumbbell Tricep Extension": "Upper Push",
+    "Dumbbell Tricep Kickback": "Upper Push",
+    # Upper Pull
+    "Weighted Chin-Up": "Upper Pull",
+    "Chin-Up": "Upper Pull",
+    "Weighted Pull-Up": "Upper Pull",
+    "Pull-Up": "Upper Pull",
+    "Dumbbell Bent-Over Row": "Upper Pull",
+    "Dumbbell One-Arm Row": "Upper Pull",
+    "Dumbbell Reverse Fly": "Upper Pull",
+    "Dumbbell Incline Curl": "Upper Pull",
+    "Dumbbell One-Arm Preacher Curl": "Upper Pull",
+    "Dumbbell Hammer Curl": "Upper Pull",
+    "Dumbbell Seated Bicep Curl": "Upper Pull",
+    # Shoulders (Lateral)
+    "Dumbbell Lateral Raise": "Shoulders",
+    "Dumbbell Lateral Raise (Prone)": "Shoulders",
+    # Lower Body
+    "Bulgarian Split Squat": "Lower",
+    "Dumbbell Squat": "Lower",
+    "Barbell Hip Thrust": "Lower",
+    "Dumbbell Stiff-Leg Deadlift": "Lower",
+    "Kettlebell Single-Leg Deadlift": "Lower",
+    "Dumbbell Calf Raise": "Lower",
+    # Core
+    "Dumbbell Side Bend": "Core",
+    "Side Bridge": "Core",
+    "Hanging Leg Raise": "Core",
+    "Ab Rollout": "Core",
+    "Dead Bug": "Core",
+    "Plank": "Core",
+}
+
+# Key lifts for progression tracking (actual exercises used)
+KEY_LIFTS = [
+    "Dumbbell Bench Press",
+    "Weighted Chin-Up",
+    "Dumbbell Squat",
+    "Barbell Hip Thrust",
+]
+
+# Muscle group colors for charts
+MUSCLE_GROUP_COLORS = {
+    "Upper Push": "#FF6B6B",   # Coral red
+    "Upper Pull": "#4ECDC4",   # Teal
+    "Shoulders": "#FFE66D",    # Yellow
+    "Lower": "#95E1D3",        # Mint
+    "Core": "#A8E6CF",         # Light green
+}
+
+# Progression status colors
+PROGRESSION_STATUS_COLORS = {
+    "READY": "#32CD32",        # Green - ready to increase
+    "PROGRESSING": "#4169E1",  # Royal blue - recently increased
+    "STABLE": "#808080",       # Gray - maintaining
+    "STAGNANT": "#FFD700",     # Gold - needs attention
+    "DELOAD": "#DC143C",       # Crimson - needs deload
+}
+
+# Progression status emoji
+PROGRESSION_STATUS_EMOJI = {
+    "READY": "🟢",
+    "PROGRESSING": "📈",
+    "STABLE": "⚪",
+    "STAGNANT": "🟡",
+    "DELOAD": "🔴",
+}

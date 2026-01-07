@@ -1,16 +1,39 @@
-# HDP Dashboard VO₂ Migration Specification
+# HDP Dashboard VO₂ Migration Specification v2
 
 **Created:** 2026-01-04  
-**Purpose:** Migrate Cardio Score from HR responsiveness metrics to VO₂ stimulus framework (Geepy's methodology)  
+**Updated:** 2026-01-04 (3-Gate Overlap Model)  
+**Purpose:** Migrate Cardio Score from HR responsiveness to multi-signal VO₂ overlap detection  
 **Status:** Specification (Ready for Implementation)
 
 ---
 
 ## Executive Summary
 
-Replace the **Responsiveness (35%)** component in the Cardio Score with **VO₂ Stimulus (35%)** based on Geepy's framework. This reframes the measurement from "how fast does HR rise" (which may be a feature, not a bug) to "how much time is spent in the productive VO₂ training zone."
+Replace the **Responsiveness (35%)** component in the Cardio Score with **VO₂ Stimulus (35%)** based on a **3-gate convergence model** validated by Geepy and Gemini.
 
-**Key Insight:** Slow HR kinetics are characteristic of high stroke volume and strong aerobic base. The real metric for VO₂ training quality is **autonomic recovery collapse** (HR_drop ≤2 bpm during easy intervals), not HR responsiveness.
+**Key Advancement:** Single-signal approaches (HR_drop only, RR only) are permissive/noisy. The 3-gate overlap model detects a **physiological state** rather than estimating a metric, providing:
+- Multi-signal convergence = high confidence
+- Built-in quality checks (inflation ratio)
+- Falsifiable validation against lactate, power decay, RPE
+
+### The Three Gates
+
+**Gate 1 — Cardiovascular Load:**
+- HR ≥ 88-92% of session max HR OR
+- HR plateaued high with minimal drift
+
+**Gate 2 — Ventilatory Engagement:**
+- RR elevated above Zone 2 baseline AND/OR
+- RR fails to normalize during easy intervals AND/OR
+- RR variability exceeds steady-state variance
+
+**Gate 3 — Recovery Impairment:**
+- HR_drop ≤ 2-3 bpm over 30s easy interval
+
+**Scoring:**
+- 1 gate → Approaching VO₂
+- 2 gates → Probable VO₂  
+- **3 gates → True VO₂ stimulus** ✅
 
 ---
 
@@ -73,33 +96,244 @@ Replace the **Responsiveness (35%)** component in the Cardio Score with **VO₂ 
 
 ---
 
-## Data Pipeline Changes
+## Data Sources (Already Available)
 
-### Phase Classification Logic
+### Polar H10 Data ✅
+You already have respiratory rate ingestion from Polar H10 ECG-derived respiration:
+- **Table:** `polar_respiratory`
+- **Key fields:**
+  - `respiratory_rate` (breaths/min)
+  - `window_center_min` (time position)
+  - `confidence` (signal quality 0-1)
+  - `avg_hr` (concurrent HR for correlation)
+- **Schema:** `src/pipeline/common/schema.py` → `polar_respiratory_schema`
+- **Ingestion:** `src/pipeline/ingest/polar_h10.py` → `derive_respiratory_rate_edr()`
 
-**Location:** New module `src/pipeline/analysis/vo2_metrics.py`
+### Concept2 Stroke Data ✅
+- **Table:** `cardio_strokes`
+- **Key fields:**
+  - `heart_rate_bpm`
+  - `time_cumulative_s`
+  - `watts`
+  - `stroke_rate_spm`
+
+### Workout Metadata ✅
+- **Table:** `workouts`
+- **Key fields:**
+  - `workout_id`
+  - `start_time_utc`
+  - `duration_min`
+  - `source`
+
+---
+
+## Data Pipeline Implementation
+
+### Module Structure
+
+```
+src/pipeline/analysis/
+├── vo2_gates.py          # Individual gate detection (NEW)
+├── vo2_overlap.py        # 3-gate overlap calculation (NEW)
+└── vo2_metrics.py        # Exists, will extend
+
+analysis/apps/utils/
+└── vo2_scoring.py        # Dashboard scoring (NEW)
+```
+
+### Gate Detection Logic
+
+**Location:** `src/pipeline/analysis/vo2_gates.py` (NEW)
 
 ```python
-"""VO₂ stimulus calculation based on HR recovery dynamics."""
-from datetime import datetime, timedelta
+"""Three-gate VO₂ stimulus detection."""
+from datetime import datetime
 import pandas as pd
-import duckdb
+import numpy as np
 
-def calculate_hr_drop(workout_df: pd.DataFrame, easy_interval_duration: int = 30) -> pd.DataFrame:
+
+def detect_gate1_hr_load(
+    strokes_df: pd.DataFrame,
+    warmup_min: float = 2.0,
+    hr_threshold_pct: float = 0.90
+) -> pd.DataFrame:
     """
-    Calculate HR_drop for each easy interval in a 30/30 session.
+    Gate 1: Cardiovascular Load
     
-    Parameters:
-        workout_df: Stroke-level data with columns ['time_cumulative_s', 'heart_rate_bpm']
-        easy_interval_duration: Duration of easy intervals in seconds (default 30)
+    Detects when HR ≥ 90% of session max OR HR plateaued high
     
     Returns:
-        DataFrame with columns ['interval_number', 'hr_start', 'hr_end', 'hr_drop', 'phase']
+        DataFrame with time windows where Gate 1 is satisfied
+    """
+    # Get session max HR (after warmup)
+    warmup_sec = warmup_min * 60
+    post_warmup = strokes_df[strokes_df['time_cumulative_s'] > warmup_sec]
+    session_max_hr = post_warmup['heart_rate_bpm'].max()
+    
+    hr_threshold = session_max_hr * hr_threshold_pct
+    
+    # Mark periods where HR meets threshold
+    strokes_df['gate1_active'] = strokes_df['heart_rate_bpm'] >= hr_threshold
+    
+    return strokes_df[['time_cumulative_s', 'heart_rate_bpm', 'gate1_active']]
+
+
+def detect_gate2_rr_engagement(
+    resp_df: pd.DataFrame,
+    zone2_baseline_rr_med: float,  # From your lactate-verified Z2 sessions
+    zone2_baseline_rr_mad: float,  # Robust variability measure
+    zone2_baseline_rr_var: float,  # Variability of variability
+    warmup_min: float = 2.0,
+    interval_duration: float = 30.0
+) -> pd.DataFrame:
+    """
+    Gate 2: Ventilatory Engagement (Geepy's Merged Specification)
+    
+    Primary: ELEVATED_AND_FAILING
+    - RR elevated above Z2 baseline
+    - RR fails to drop during easy intervals
+    
+    Secondary: CHAOTIC (optional enhancer)
+    - RR variability exceeds Z2 baseline chaos
+    
+    Returns:
+        DataFrame with interval-level gate status
+    """
+    if resp_df.empty:
+        return pd.DataFrame()
+    
+    # Preprocessing: 15s rolling median to strip jitter
+    resp_df = resp_df.copy()
+    resp_df['rr_smoothed'] = (
+        resp_df['respiratory_rate']
+        .rolling(window=3, min_periods=1, center=True)  # ~15s windows
+        .median()
+    )
+    
+    # Filter to work period
+    work_resp = resp_df[resp_df['window_center_min'] >= warmup_min].copy()
+    
+    if work_resp.empty:
+        return pd.DataFrame()
+    
+    # Personalized thresholds
+    rr_hi = zone2_baseline_rr_med + max(6, 3 * zone2_baseline_rr_mad)
+    rr_drop_min = max(1.5, 2 * zone2_baseline_rr_mad)
+    rr_var_hi = max(2.0, 2 * zone2_baseline_rr_var)
+    
+    # Calculate per-interval metrics
+    results = []
+    
+    # Identify easy intervals based on time windows
+    # Assuming 30s work / 30s easy: easy = [0.5-1.0, 1.5-2.0, 2.5-3.0 min, ...]
+    max_time = work_resp['window_center_min'].max()
+    interval_count = int(max_time)
+    
+    for i in range(interval_count):
+        # Easy interval: i*1.0 + 0.5 to i*1.0 + 1.0 minutes
+        easy_start = warmup_min + i * 1.0 + 0.5
+        easy_end = easy_start + 0.5
+        
+        easy_windows = work_resp[
+            (work_resp['window_center_min'] >= easy_start) &
+            (work_resp['window_center_min'] <= easy_end)
+        ]
+        
+        if len(easy_windows) < 2:
+            continue
+        
+        # RR at start/end of easy interval
+        rr_start_e = easy_windows.iloc[0]['rr_smoothed']
+        rr_end_e = easy_windows.iloc[-1]['rr_smoothed']
+        rr_drop_e = rr_start_e - rr_end_e
+        rr_mean_e = easy_windows['rr_smoothed'].median()
+        
+        # Primary condition: ELEVATED_AND_FAILING
+        elevated_and_failing = (rr_mean_e >= rr_hi) and (rr_drop_e <= rr_drop_min)
+        
+        # Secondary condition: CHAOTIC
+        # Calculate MAD over 60s rolling window around this interval
+        chaos_window = work_resp[
+            (work_resp['window_center_min'] >= easy_start - 0.5) &
+            (work_resp['window_center_min'] <= easy_end + 0.5)
+        ]
+        
+        if len(chaos_window) >= 3:
+            rr_median = chaos_window['rr_smoothed'].median()
+            rr_mad = (chaos_window['rr_smoothed'] - rr_median).abs().median()
+            chaotic = rr_mad >= rr_var_hi
+        else:
+            chaotic = False
+        
+        # Final Gate 2 decision
+        gate2_active = elevated_and_failing or chaotic
+        
+        results.append({
+            'interval_number': i + 1,
+            'interval_start_min': easy_start,
+            'interval_end_min': easy_end,
+            'rr_mean_e': rr_mean_e,
+            'rr_drop_e': rr_drop_e,
+            'elevated_and_failing': elevated_and_failing,
+            'chaotic': chaotic,
+            'gate2_active': gate2_active
+        })
+    
+    return pd.DataFrame(results)
+
+
+def detect_gate3_recovery_impairment(
+    strokes_df: pd.DataFrame,
+    interval_duration: float = 30.0,
+    hr_drop_threshold: float = 2.5  # ≤2.5 bpm = impaired
+) -> pd.DataFrame:
+    """
+    Gate 3: Recovery Impairment
+    
+    Detects when HR_drop ≤ 2.5 bpm during 30s easy intervals
+    
+    Returns:
+        DataFrame with interval-level gate status
     """
     results = []
     
-    # Identify easy intervals (assuming 30s work / 30s easy pattern)
-    # Easy intervals are: 30-60s, 90-120s, 150-180s, etc.
+    # Identify easy intervals (30-60s, 90-120s, etc.)
+    total_duration = strokes_df['time_cumulative_s'].max()
+    interval_count = int(total_duration / 60)
+    
+    for i in range(interval_count):
+        easy_start = i * 60 + 30
+        easy_end = easy_start + interval_duration
+        
+        # Get HR at start/end of easy interval
+        hr_start_rows = strokes_df[
+            (strokes_df['time_cumulative_s'] >= easy_start) &
+            (strokes_df['time_cumulative_s'] < easy_start + 5)
+        ]
+        hr_end_rows = strokes_df[
+            (strokes_df['time_cumulative_s'] >= easy_end - 5) &
+            (strokes_df['time_cumulative_s'] <= easy_end)
+        ]
+        
+        if hr_start_rows.empty or hr_end_rows.empty:
+            continue
+        
+        hr_start = hr_start_rows['heart_rate_bpm'].mean()
+        hr_end = hr_end_rows['heart_rate_bpm'].mean()
+        hr_drop = hr_start - hr_end
+        
+        # Gate 3 active if HR_drop ≤ threshold
+        gate3_active = hr_drop <= hr_drop_threshold
+        
+        results.append({
+            'interval_number': i + 1,
+            'interval_start_min': easy_start / 60,
+            'interval_end_min': easy_end / 60,
+            'hr_drop': hr_drop,
+            'gate3_active': gate3_active
+        })
+    
+    return pd.DataFrame(results)
     total_duration = workout_df['time_cumulative_s'].max()
     interval_count = int(total_duration / 60)  # Each 60s = 1 work + 1 easy
     
@@ -655,6 +889,27 @@ If issues arise, the old Responsiveness metrics can be re-enabled:
 4. Create scoring module
 5. Update dashboard UI
 6. Deploy and validate
+
+---
+
+## Pending Tasks (Updated 2026-01-04)
+
+### Completed ✅
+- [x] `vo2_gates.py` - Individual gate detection functions
+- [x] `vo2_overlap.py` - 3-gate convergence calculation
+- [x] `vo2_metrics.py` - HR drop and respiratory rate analysis
+- [x] Polar H10 ingestion module (`polar_h10.py`)
+- [x] Test 3-gate model on Jan 4 VO2 session → **5.0 min TRUE VO2**
+
+### Pending ⏳
+- [ ] **Collect Z2 baseline data** - Do Z2 session with Polar H10 to establish baseline RR metrics
+- [ ] **Dashboard integration** - Add `vo2_scoring.py` for Streamlit display
+- [ ] **Weekly aggregate metrics** - Query multiple sessions for weekly VO2 totals
+- [ ] **Validation** - Compare 3-gate vs lactate/RPE correlation
+
+### Data Dependencies
+- Z2 baseline RR requires: lactate-verified Z2 session with Polar H10 ECG recording
+- Current defaults: RR median=22.0, MAD=2.0 (estimates, need real data)
 
 ---
 
