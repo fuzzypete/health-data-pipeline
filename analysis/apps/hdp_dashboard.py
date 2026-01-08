@@ -59,6 +59,7 @@ from utils.constants import (
 )
 from utils.queries import (
     get_cardio_score_data,
+    get_glucose_data,
     get_latest_ferritin,
     get_max_hr_7d,
     get_recovery_score_data,
@@ -77,6 +78,7 @@ from utils.scores import (
     calculate_cardio_score,
     calculate_recovery_score,
     calculate_vitals_score,
+    calc_glucose_score,
 )
 
 # =============================================================================
@@ -99,8 +101,30 @@ st.markdown("""
 <style>
     /* Reduce padding for mobile */
     .block-container {
-        padding-top: 1rem;
+        padding-top: 2rem;
         padding-bottom: 1rem;
+    }
+
+    /* Aggressive Header Compaction */
+    header {
+        visibility: hidden;
+    }
+    #MainMenu {
+        visibility: visible;
+    }
+    
+    /* Compact Title Area */
+    h1 {
+        font-size: 1.8rem !important;
+        margin-top: -3rem !important;
+        margin-bottom: 0.5rem !important;
+        padding-bottom: 0 !important;
+    }
+    
+    /* Move the "Weekly Plan" / "NOW" buttons up to align with title if possible, 
+       or just reduce their container's padding */
+    [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
+        gap: 0.5rem;
     }
 
     /* Larger touch targets for mobile */
@@ -126,15 +150,29 @@ st.markdown("""
     }
 
     @media (max-width: 640px) {
-        [data-testid="stHorizontalBlock"] > div {
+        /* Force Score Cards (Buttons) to be 3-per-row */
+        [data-testid="stColumn"]:has(button) {
+            min-width: 30% !important;
+            flex: 1 1 30% !important;
+        }
+
+        /* Default all other columns (Metrics) to 2-per-row (Dense) */
+        [data-testid="stHorizontalBlock"] > div:not(:has(button)) {
             min-width: 45% !important;
             flex: 1 1 45% !important;
         }
+        
         [data-testid="stMetric"] {
             padding: 5px;
         }
         [data-testid="stMetricValue"] {
-            font-size: 1.5rem !important;
+            font-size: 1.25rem !important;
+        }
+        [data-testid="stMetricLabel"] {
+            font-size: 0.8rem !important;
+            white-space: nowrap; /* Prevent wrapping if possible, or use normal for multiline */
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
     }
 
@@ -226,25 +264,20 @@ def render_sidebar() -> tuple[datetime, datetime]:
 
 
 def render_header():
-    """Render dashboard header."""
-    col1, col2, col3 = st.columns([3, 1, 1])
-
-    with col1:
-        st.title("HDP Dashboard")
-
-    with col2:
-        st.link_button(
-            "Weekly Plan",
-            url="https://github.com/pwickersham/health-data-pipeline",
-            help="View weekly training plan",
-        )
-
-    with col3:
-        st.link_button(
-            "NOW",
-            url="#now-current-status",
-            help="Jump to current status",
-        )
+    """Render compact dashboard header."""
+    st.markdown("""
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h1 style="margin: 0 !important; font-size: 1.5rem !important; padding: 0 !important;">HDP Dashboard</h1>
+            <div style="display: flex; gap: 0.5rem;">
+                <a href="https://github.com/pwickersham/health-data-pipeline" target="_blank" style="text-decoration: none;">
+                    <button style="border: 1px solid #444; background: #262730; color: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">Plan</button>
+                </a>
+                <a href="#now-current-status" style="text-decoration: none;">
+                    <button style="border: 1px solid #444; background: #262730; color: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">Now</button>
+                </a>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -297,6 +330,117 @@ STATUS_EMOJIS = {
 }
 
 
+# =============================================================================
+# Score Details (Modals)
+# =============================================================================
+
+
+@st.dialog("Recovery Breakdown")
+def show_recovery_details(score):
+    """Show detailed recovery breakdown in a modal."""
+    st.caption(f"Status: {score.status}")
+    st.progress(score.total / 100)
+    st.divider()
+    
+    for tier_key, tier_name in [
+        ("sleep_rest", "Sleep & Rest"),
+        ("autonomic", "Autonomic State"),
+        ("training_load", "Training Load")
+    ]:
+        tier = score.tiers[tier_key]
+        st.markdown(f"**{tier_name} ({tier.weight})** — {tier.score}")
+        
+        # 2-Column Grid for components
+        components = list(tier.components.items())
+        for i in range(0, len(components), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(components):
+                    comp_name, comp_score = components[i+j]
+                    with cols[j]:
+                        st.caption(f"{comp_name.replace('_', ' ').title()}")
+                        st.progress(comp_score / 100)
+        st.divider()
+
+
+@st.dialog("Cardio Breakdown")
+def show_cardio_details(score):
+    """Show detailed cardio breakdown in a modal."""
+    st.caption(f"Status: {score.status}")
+    st.progress(score.total / 100)
+    st.divider()
+
+    # Capacity
+    tier = score.tiers["capacity_ceiling"]
+    st.markdown(f"**Capacity ({tier.weight})** — {tier.score}")
+    components = list(tier.components.items())
+    for i in range(0, len(components), 2):
+        cols = st.columns(2)
+        for j in range(2):
+            if i + j < len(components):
+                n, s = components[i+j]
+                with cols[j]:
+                    st.caption(n.replace('_', ' ').title())
+                    st.progress(s / 100)
+    st.divider()
+
+    # Responsiveness
+    tier = score.tiers["responsiveness"]
+    is_limiter = tier.score < score.tiers["capacity_ceiling"].score - 10
+    limiter_marker = " ← LIMITER" if is_limiter else ""
+    st.markdown(f"**Responsiveness ({tier.weight})** — {tier.score}{limiter_marker}")
+    components = list(tier.components.items())
+    for i in range(0, len(components), 2):
+        cols = st.columns(2)
+        for j in range(2):
+            if i + j < len(components):
+                n, s = components[i+j]
+                with cols[j]:
+                    st.caption(n.replace('_', ' ').title())
+                    st.progress(s / 100)
+    st.divider()
+
+    # Efficiency
+    tier = score.tiers["efficiency_baseline"]
+    st.markdown(f"**Efficiency ({tier.weight})** — {tier.score}")
+    components = list(tier.components.items())
+    for i in range(0, len(components), 2):
+        cols = st.columns(2)
+        for j in range(2):
+            if i + j < len(components):
+                n, s = components[i+j]
+                with cols[j]:
+                    st.caption(n.replace('_', ' ').title())
+                    st.progress(s / 100)
+
+
+@st.dialog("Vitals Breakdown")
+def show_vitals_details(score):
+    """Show detailed vitals breakdown in a modal."""
+    st.caption(f"Status: {score.status}")
+    st.progress(score.total / 100)
+    st.divider()
+
+    components = list(score.tiers["components"].components.items())
+    component_labels = {
+        "blood_pressure": "BP (30%)",
+        "resting_hr": "RHR (25%)",
+        "hrv": "HRV (25%)",
+        "spo2": "SpO2 (10%)",
+        "respiratory_rate": "Resp Rate (10%)",
+    }
+
+    for i in range(0, len(components), 2):
+        cols = st.columns(2)
+        for j in range(2):
+            if i + j < len(components):
+                comp_name, comp_score = components[i+j]
+                label = component_labels.get(comp_name, comp_name.replace("_", " ").title())
+                with cols[j]:
+                    st.caption(label)
+                    st.progress(comp_score / 100)
+
+
 def render_score_progress_bar(score: int, color: str) -> str:
     """Generate HTML for a score progress bar."""
     filled = int(score / 100 * 20)
@@ -327,32 +471,12 @@ def render_recovery_score_card():
 
     emoji = STATUS_EMOJIS.get(score.status, "")
 
-    # Main score display
-    st.markdown(f"**{emoji} Recovery: {score.total}**")
+    # Clickable Score Card
+    st.markdown(f"**{emoji} Recovery**")
+    if st.button(f"{score.total}", key="btn_rec", use_container_width=True):
+        show_recovery_details(score)
     st.progress(score.total / 100)
-    st.caption(f"{score.status}")
 
-    # Expandable tier breakdown
-    with st.expander("Breakdown", expanded=False):
-        for tier_key, tier_name in [
-            ("sleep_rest", "Sleep & Rest"),
-            ("autonomic", "Autonomic State"),
-            ("training_load", "Training Load")
-        ]:
-            tier = score.tiers[tier_key]
-            st.markdown(f"**{tier_name} ({tier.weight})** — {tier.score}")
-            
-            # 2-Column Grid for components
-            components = list(tier.components.items())
-            for i in range(0, len(components), 2):
-                cols = st.columns(2)
-                for j in range(2):
-                    if i + j < len(components):
-                        comp_name, comp_score = components[i+j]
-                        with cols[j]:
-                            st.caption(f"{comp_name.replace('_', ' ').title()}")
-                            st.progress(comp_score / 100)
-            st.divider()
 
 
 def render_cardio_score_card():
@@ -375,55 +499,12 @@ def render_cardio_score_card():
 
     emoji = STATUS_EMOJIS.get(score.status, "")
 
-    # Main score display
-    st.markdown(f"**{emoji} Cardio: {score.total}**")
+    # Clickable Score Card
+    st.markdown(f"**{emoji} Cardio**")
+    if st.button(f"{score.total}", key="btn_cardio", use_container_width=True):
+        show_cardio_details(score)
     st.progress(score.total / 100)
-    st.caption(f"{score.status}")
 
-    # Expandable tier breakdown
-    with st.expander("Breakdown", expanded=False):
-        # Capacity
-        tier = score.tiers["capacity_ceiling"]
-        st.markdown(f"**Capacity ({tier.weight})** — {tier.score}")
-        components = list(tier.components.items())
-        for i in range(0, len(components), 2):
-            cols = st.columns(2)
-            for j in range(2):
-                if i + j < len(components):
-                    n, s = components[i+j]
-                    with cols[j]:
-                        st.caption(n.replace('_', ' ').title())
-                        st.progress(s / 100)
-        st.divider()
-
-        # Responsiveness
-        tier = score.tiers["responsiveness"]
-        is_limiter = tier.score < score.tiers["capacity_ceiling"].score - 10
-        limiter_marker = " ← LIMITER" if is_limiter else ""
-        st.markdown(f"**Responsiveness ({tier.weight})** — {tier.score}{limiter_marker}")
-        components = list(tier.components.items())
-        for i in range(0, len(components), 2):
-            cols = st.columns(2)
-            for j in range(2):
-                if i + j < len(components):
-                    n, s = components[i+j]
-                    with cols[j]:
-                        st.caption(n.replace('_', ' ').title())
-                        st.progress(s / 100)
-        st.divider()
-
-        # Efficiency
-        tier = score.tiers["efficiency_baseline"]
-        st.markdown(f"**Efficiency ({tier.weight})** — {tier.score}")
-        components = list(tier.components.items())
-        for i in range(0, len(components), 2):
-            cols = st.columns(2)
-            for j in range(2):
-                if i + j < len(components):
-                    n, s = components[i+j]
-                    with cols[j]:
-                        st.caption(n.replace('_', ' ').title())
-                        st.progress(s / 100)
 
 
 def render_vitals_score_card():
@@ -444,31 +525,12 @@ def render_vitals_score_card():
 
     emoji = STATUS_EMOJIS.get(score.status, "")
 
-    # Main score display
-    st.markdown(f"**{emoji} Vitals: {score.total}**")
+    # Clickable Score Card
+    st.markdown(f"**{emoji} Vitals**")
+    if st.button(f"{score.total}", key="btn_vitals", use_container_width=True):
+        show_vitals_details(score)
     st.progress(score.total / 100)
-    st.caption(f"{score.status}")
 
-    # Expandable component breakdown
-    with st.expander("Breakdown", expanded=False):
-        components = list(score.tiers["components"].components.items())
-        component_labels = {
-            "blood_pressure": "BP (30%)",
-            "resting_hr": "RHR (25%)",
-            "hrv": "HRV (25%)",
-            "spo2": "SpO2 (10%)",
-            "respiratory_rate": "Resp Rate (10%)",
-        }
-
-        for i in range(0, len(components), 2):
-            cols = st.columns(2)
-            for j in range(2):
-                if i + j < len(components):
-                    comp_name, comp_score = components[i+j]
-                    label = component_labels.get(comp_name, comp_name.replace("_", " ").title())
-                    with cols[j]:
-                        st.caption(label)
-                        st.progress(comp_score / 100)
 
 
 def render_score_cards():
@@ -657,21 +719,21 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
 
         fig.update_layout(
             template="plotly_dark",
-            title="Zone 2 Power + Ferritin",
+            # title="Zone 2 Power + Ferritin",  # Removed to prevent crowding
             hovermode="x unified",
             height=300,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-            margin=dict(l=0, r=0, t=30, b=0),
+            margin=dict(l=0, r=0, t=10, b=0),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        fig.update_xaxes(title_text="Date")
+        fig.update_xaxes(title_text="Date", tickangle=-45, nticks=6)
         fig.update_yaxes(title_text="Power (watts)", secondary_y=False)
         fig.update_yaxes(title_text="Ferritin (ng/mL)", secondary_y=True)
 
         st.plotly_chart(fig, width="stretch")
 
-        # Summary metrics - 2x2 Grid for Mobile
+        # Summary metrics (Forced 2x2 Grid)
         c1, c2 = st.columns(2)
         with c1:
             avg_watts = zone2_workouts["avg_watts"].mean()
@@ -679,7 +741,7 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
         with c2:
             max_watts = zone2_workouts["avg_watts"].max()
             st.metric("Max Z2 Power", f"{max_watts:.0f}W")
-            
+        
         c3, c4 = st.columns(2)
         with c3:
             workouts_count = len(zone2_workouts)
@@ -700,6 +762,91 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
                     st.metric("VO2 Stimulus", "No data")
             except Exception:
                 st.metric("VO2 Stimulus", "N/A")
+
+
+# =============================================================================
+# Metabolic Section (Glucose/CGM)
+# =============================================================================
+
+
+def render_metabolic_section(start_date: datetime, end_date: datetime):
+    """Render the metabolic health (CGM) section."""
+    with st.expander("Metabolic Health (CGM)", expanded=True):
+        data = get_glucose_data()
+        
+        if not data or data.get("avg_glucose") is None:
+            st.info("No glucose data found (CGM).")
+            return
+
+        # Calculate Score
+        # Using placeholder values for target ranges if not available
+        score_val = calc_glucose_score(
+            avg_glucose=data["avg_glucose"],
+            time_in_range_pct=data["time_in_range"],
+            coefficient_of_variation=data["cv"]
+        )
+        
+        status = "Optimal" if score_val >= 90 else "Good" if score_val >= 80 else "Fair" if score_val >= 70 else "Poor"
+        emoji = {"Optimal": "🟢", "Good": "🟢", "Fair": "🟡", "Poor": "🔴"}.get(status, "⚪")
+
+        # --- Score Card (Compact) ---
+        st.markdown(f"**{emoji} Glucose: {score_val}**")
+        st.progress(score_val / 100)
+        
+        # --- Chart: 7-Day Trace ---
+        if data.get("trace"):
+            import pandas as pd
+            trace_df = pd.DataFrame(data["trace"])
+            
+            fig = go.Figure()
+            
+            # Target Band (70-140)
+            fig.add_hrect(
+                y0=70, y1=140, 
+                fillcolor=COLORS.get("optimal", "green"), opacity=0.1, 
+                layer="below", line_width=0,
+            )
+            
+            fig.add_trace(go.Scatter(
+                x=trace_df["timestamp_utc"],
+                y=trace_df["glucose"],
+                mode="lines",
+                name="Glucose",
+                line=dict(color=COLORS.get("primary", "#00f"), width=2),
+                hovertemplate="%{x}<br>%{y:.0f} mg/dL<extra></extra>"
+            ))
+            
+            fig.update_layout(
+                template="plotly_dark",
+                # title="7-Day Glucose Trend", # Removed for mobile density
+                height=250,
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                showlegend=False,
+                xaxis_title=None,
+                yaxis=dict(range=[40, 200]),
+            )
+            fig.update_xaxes(tickangle=-45, nticks=6)
+            st.plotly_chart(fig, width="stretch")
+
+        # --- Metrics Grid (Forced 2x2) ---
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Avg Glucose", f"{data['avg_glucose']:.0f} mg/dL")
+        with c2:
+            tir = data['time_in_range']
+            st.metric("Time in Range", f"{tir:.0f}%", delta="Target > 90%" if tir < 90 else None)
+        
+        c3, c4 = st.columns(2)
+        with c3:
+            if data.get("estimated_a1c"):
+                st.metric("Est. A1C", f"{data['estimated_a1c']:.1f}%")
+            else:
+                st.metric("Est. A1C", "N/A")
+        with c4:
+            cv = data['cv']
+            st.metric("Variability (CV)", f"{cv:.1f}%", delta="Target < 20%" if cv > 20 else None, delta_color="inverse")
 
 
 # =============================================================================
@@ -745,16 +892,16 @@ def render_recovery_section(start_date: datetime, end_date: datetime):
 
         fig.update_layout(
             template="plotly_dark",
-            title="HRV & Readiness Trend",
+            # title="HRV & Readiness Trend", # Removed
             height=250,
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-            margin=dict(l=0, r=0, t=30, b=0),
+            margin=dict(l=0, r=0, t=10, b=0),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
+        fig.update_xaxes(tickangle=-45, nticks=6)
         fig.update_yaxes(title_text="HRV Score", secondary_y=False)
-        fig.update_yaxes(title_text="Readiness Score", secondary_y=True)
 
         st.plotly_chart(fig, width="stretch")
 
@@ -766,6 +913,8 @@ def render_recovery_section(start_date: datetime, end_date: datetime):
             target_sleep = 7.5
             sleep_debt = (target_sleep - avg_sleep) * 7  # Weekly debt
 
+            # Force 3-column grid for sleep (fits on mobile usually, or we can do 2+1)
+            # Let's do 3 since they are short metrics
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Avg Sleep", f"{avg_sleep:.1f} hr")
@@ -1105,6 +1254,7 @@ def main():
 
     # Main sections
     render_cardiovascular_section(start_date, end_date)
+    render_metabolic_section(start_date, end_date)
     render_recovery_section(start_date, end_date)
     render_strength_section(start_date, end_date)
     render_weekly_coach_section()
