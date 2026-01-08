@@ -85,10 +85,11 @@ def get_timeline_data(start, end):
     # Workouts (all for max HR trend)
     workouts_df = query_workouts(start, end)
     if not workouts_df.empty:
-        workouts_df['date'] = pd.to_datetime(workouts_df['start_time_utc']).dt.date
-        # 7-day rolling max HR
-        workouts_df = workouts_df.sort_values('start_time_utc')
-        workouts_df['max_hr_7d'] = workouts_df['max_hr_bpm'].rolling(window='7D', on=pd.to_datetime(workouts_df['start_time_utc'])).max()
+        workouts_df['start_time_dt'] = pd.to_datetime(workouts_df['start_time_utc'])
+        workouts_df['date'] = workouts_df['start_time_dt'].dt.date
+        # 7-day rolling max HR (must be sorted by the 'on' column)
+        workouts_df = workouts_df.sort_values('start_time_dt')
+        workouts_df['max_hr_7d'] = workouts_df.rolling(window='7D', on='start_time_dt')['max_hr_bpm'].max()
     
     # Zone 2 Power
     z2_df = query_zone2_workouts(start, end, erg_type="bike")
@@ -239,7 +240,7 @@ fig.update_yaxes(title_text="Performance (W / bpm)", secondary_y=False, row=1, c
 fig.update_yaxes(title_text="Labs (ng/mL / mg/dL)", secondary_y=True, row=1, col=1)
 fig.update_yaxes(showticklabels=True, row=2, col=1)
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # =============================================================================
 # Insights & Stats

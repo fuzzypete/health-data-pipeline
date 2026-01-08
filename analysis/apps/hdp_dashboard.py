@@ -117,6 +117,35 @@ st.markdown("""
         margin-bottom: 0.5rem;
     }
 
+    /* Force 2-column layout for metrics on mobile */
+    [data-testid="stMetric"] {
+        background-color: #262730;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 5px;
+    }
+
+    @media (max-width: 640px) {
+        [data-testid="stHorizontalBlock"] > div {
+            min-width: 45% !important;
+            flex: 1 1 45% !important;
+        }
+        [data-testid="stMetric"] {
+            padding: 5px;
+        }
+        [data-testid="stMetricValue"] {
+            font-size: 1.5rem !important;
+        }
+    }
+
+    /* Compact Score Cards */
+    .stProgress > div > div > div > div {
+        height: 8px !important;
+    }
+    p {
+        margin-bottom: 0.2rem;
+    }
+
     /* Status colors */
     .status-optimal { color: #32CD32; }
     .status-good { color: #90EE90; }
@@ -128,6 +157,13 @@ st.markdown("""
         .block-container {
             padding-left: 0.5rem;
             padding-right: 0.5rem;
+        }
+        h3 {
+            margin-top: 0.5rem !important;
+            margin-bottom: 0.5rem !important;
+        }
+        div[data-testid="stMetricValue"] > div {
+            font-size: 1.25rem !important;
         }
     }
 </style>
@@ -174,7 +210,7 @@ def render_sidebar() -> tuple[datetime, datetime]:
     st.sidebar.divider()
 
     # Refresh button
-    if st.sidebar.button("Refresh Data", use_container_width=True):
+    if st.sidebar.button("Refresh Data", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
@@ -292,57 +328,31 @@ def render_recovery_score_card():
     emoji = STATUS_EMOJIS.get(score.status, "")
 
     # Main score display
-    st.markdown(f"### {emoji} Recovery Score")
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.progress(score.total / 100)
-    with col2:
-        st.markdown(f"**{score.total}**")
-
+    st.markdown(f"**{emoji} Recovery: {score.total}**")
+    st.progress(score.total / 100)
     st.caption(f"{score.status}")
 
     # Expandable tier breakdown
-    with st.expander("Score Breakdown", expanded=False):
-        # Sleep & Rest Tier
-        tier = score.tiers["sleep_rest"]
-        st.markdown(f"**Sleep & Rest ({tier.weight})** — {tier.score}")
-        for comp_name, comp_score in tier.components.items():
-            display_name = comp_name.replace("_", " ").title()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
-            st.caption(display_name)
-
-        st.divider()
-
-        # Autonomic Tier
-        tier = score.tiers["autonomic"]
-        st.markdown(f"**Autonomic State ({tier.weight})** — {tier.score}")
-        for comp_name, comp_score in tier.components.items():
-            display_name = comp_name.replace("_", " ").title()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
-            st.caption(display_name)
-
-        st.divider()
-
-        # Training Load Tier
-        tier = score.tiers["training_load"]
-        st.markdown(f"**Training Load ({tier.weight})** — {tier.score}")
-        for comp_name, comp_score in tier.components.items():
-            display_name = comp_name.replace("_", " ").title()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
-            st.caption(display_name)
+    with st.expander("Breakdown", expanded=False):
+        for tier_key, tier_name in [
+            ("sleep_rest", "Sleep & Rest"),
+            ("autonomic", "Autonomic State"),
+            ("training_load", "Training Load")
+        ]:
+            tier = score.tiers[tier_key]
+            st.markdown(f"**{tier_name} ({tier.weight})** — {tier.score}")
+            
+            # 2-Column Grid for components
+            components = list(tier.components.items())
+            for i in range(0, len(components), 2):
+                cols = st.columns(2)
+                for j in range(2):
+                    if i + j < len(components):
+                        comp_name, comp_score = components[i+j]
+                        with cols[j]:
+                            st.caption(f"{comp_name.replace('_', ' ').title()}")
+                            st.progress(comp_score / 100)
+            st.divider()
 
 
 def render_cardio_score_card():
@@ -366,59 +376,54 @@ def render_cardio_score_card():
     emoji = STATUS_EMOJIS.get(score.status, "")
 
     # Main score display
-    st.markdown(f"### {emoji} Cardio Score")
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.progress(score.total / 100)
-    with col2:
-        st.markdown(f"**{score.total}**")
-
+    st.markdown(f"**{emoji} Cardio: {score.total}**")
+    st.progress(score.total / 100)
     st.caption(f"{score.status}")
 
     # Expandable tier breakdown
-    with st.expander("Score Breakdown", expanded=False):
-        # Capacity Tier
+    with st.expander("Breakdown", expanded=False):
+        # Capacity
         tier = score.tiers["capacity_ceiling"]
-        st.markdown(f"**Capacity & Ceiling ({tier.weight})** — {tier.score}")
-        for comp_name, comp_score in tier.components.items():
-            display_name = comp_name.replace("_", " ").title()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
-            st.caption(display_name)
-
+        st.markdown(f"**Capacity ({tier.weight})** — {tier.score}")
+        components = list(tier.components.items())
+        for i in range(0, len(components), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(components):
+                    n, s = components[i+j]
+                    with cols[j]:
+                        st.caption(n.replace('_', ' ').title())
+                        st.progress(s / 100)
         st.divider()
 
-        # Responsiveness Tier
+        # Responsiveness
         tier = score.tiers["responsiveness"]
         is_limiter = tier.score < score.tiers["capacity_ceiling"].score - 10
         limiter_marker = " ← LIMITER" if is_limiter else ""
         st.markdown(f"**Responsiveness ({tier.weight})** — {tier.score}{limiter_marker}")
-        for comp_name, comp_score in tier.components.items():
-            display_name = comp_name.replace("_", " ").title()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
-            st.caption(display_name)
-
+        components = list(tier.components.items())
+        for i in range(0, len(components), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(components):
+                    n, s = components[i+j]
+                    with cols[j]:
+                        st.caption(n.replace('_', ' ').title())
+                        st.progress(s / 100)
         st.divider()
 
-        # Efficiency Tier
+        # Efficiency
         tier = score.tiers["efficiency_baseline"]
-        st.markdown(f"**Efficiency & Baseline ({tier.weight})** — {tier.score}")
-        for comp_name, comp_score in tier.components.items():
-            display_name = comp_name.replace("_", " ").title()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
-            st.caption(display_name)
+        st.markdown(f"**Efficiency ({tier.weight})** — {tier.score}")
+        components = list(tier.components.items())
+        for i in range(0, len(components), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(components):
+                    n, s = components[i+j]
+                    with cols[j]:
+                        st.caption(n.replace('_', ' ').title())
+                        st.progress(s / 100)
 
 
 def render_vitals_score_card():
@@ -440,37 +445,30 @@ def render_vitals_score_card():
     emoji = STATUS_EMOJIS.get(score.status, "")
 
     # Main score display
-    st.markdown(f"### {emoji} Vitals Score")
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.progress(score.total / 100)
-    with col2:
-        st.markdown(f"**{score.total}**")
-
+    st.markdown(f"**{emoji} Vitals: {score.total}**")
+    st.progress(score.total / 100)
     st.caption(f"{score.status}")
 
     # Expandable component breakdown
-    with st.expander("Score Breakdown", expanded=False):
-        components = score.tiers["components"].components
-
-        # Display each component
+    with st.expander("Breakdown", expanded=False):
+        components = list(score.tiers["components"].components.items())
         component_labels = {
-            "blood_pressure": ("Blood Pressure", "30%"),
-            "resting_hr": ("Resting HR", "25%"),
-            "hrv": ("HRV", "25%"),
-            "spo2": ("SpO2", "10%"),
-            "respiratory_rate": ("Respiratory Rate", "10%"),
+            "blood_pressure": "BP (30%)",
+            "resting_hr": "RHR (25%)",
+            "hrv": "HRV (25%)",
+            "spo2": "SpO2 (10%)",
+            "respiratory_rate": "Resp Rate (10%)",
         }
 
-        for comp_name, comp_score in components.items():
-            label, weight = component_labels.get(comp_name, (comp_name, ""))
-            st.markdown(f"**{label}** ({weight})")
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.progress(comp_score / 100)
-            with col2:
-                st.write(f"{comp_score}")
+        for i in range(0, len(components), 2):
+            cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(components):
+                    comp_name, comp_score = components[i+j]
+                    label = component_labels.get(comp_name, comp_name.replace("_", " ").title())
+                    with cols[j]:
+                        st.caption(label)
+                        st.progress(comp_score / 100)
 
 
 def render_score_cards():
@@ -659,11 +657,11 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
 
         fig.update_layout(
             template="plotly_dark",
-            title="Zone 2 Power Progression + Ferritin",
+            title="Zone 2 Power + Ferritin",
             hovermode="x unified",
-            height=400,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            margin=dict(l=0, r=0, t=60, b=0),
+            height=300,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=0, r=0, t=30, b=0),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
@@ -671,20 +669,22 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
         fig.update_yaxes(title_text="Power (watts)", secondary_y=False)
         fig.update_yaxes(title_text="Ferritin (ng/mL)", secondary_y=True)
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
+        # Summary metrics - 2x2 Grid for Mobile
+        c1, c2 = st.columns(2)
+        with c1:
             avg_watts = zone2_workouts["avg_watts"].mean()
             st.metric("Avg Z2 Power", f"{avg_watts:.0f}W")
-        with col2:
+        with c2:
             max_watts = zone2_workouts["avg_watts"].max()
             st.metric("Max Z2 Power", f"{max_watts:.0f}W")
-        with col3:
+            
+        c3, c4 = st.columns(2)
+        with c3:
             workouts_count = len(zone2_workouts)
             st.metric("Z2 Sessions", f"{workouts_count}")
-        with col4:
+        with c4:
             # Latest VO2 stimulus from Polar data if available
             try:
                 from utils.queries import query_polar_sessions, get_vo2_analysis
@@ -695,7 +695,7 @@ def render_cardiovascular_section(start_date: datetime, end_date: datetime):
                     # Get True VO2 time from summary
                     summary = vo2_analysis.get("summary", {})
                     stimulus_min = summary.get("true_vo2_time_min", 0)
-                    st.metric("Latest VO2 Stimulus", f"{stimulus_min:.1f} min")
+                    st.metric("Latest VO2 Stim", f"{stimulus_min:.1f} min")
                 else:
                     st.metric("VO2 Stimulus", "No data")
             except Exception:
@@ -746,17 +746,17 @@ def render_recovery_section(start_date: datetime, end_date: datetime):
         fig.update_layout(
             template="plotly_dark",
             title="HRV & Readiness Trend",
-            height=350,
+            height=250,
             hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            margin=dict(l=0, r=0, t=60, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=0, r=0, t=30, b=0),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
         fig.update_yaxes(title_text="HRV Score", secondary_y=False)
         fig.update_yaxes(title_text="Readiness Score", secondary_y=True)
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Sleep metrics
         if "total_sleep_duration_hr" in oura_data.columns:
@@ -868,7 +868,7 @@ def render_strength_section(start_date: datetime, end_date: datetime):
                 plot_bgcolor="rgba(0,0,0,0)",
             )
 
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         else:
             st.info("No data for key lifts in this period.")
 
@@ -914,7 +914,7 @@ def render_strength_section(start_date: datetime, end_date: datetime):
                 plot_bgcolor="rgba(0,0,0,0)",
             )
 
-            st.plotly_chart(fig_mg, use_container_width=True)
+            st.plotly_chart(fig_mg, width="stretch")
 
         # --- Progress Indicators Table ---
         st.markdown("#### Exercise Progress")
@@ -958,7 +958,7 @@ def render_strength_section(start_date: datetime, end_date: datetime):
                 progress_df = pd.DataFrame(progress_data)
                 st.dataframe(
                     progress_df,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=min(400, 35 * len(progress_data) + 38),
                 )

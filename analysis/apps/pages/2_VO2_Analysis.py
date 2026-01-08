@@ -247,7 +247,7 @@ if not stroke_df.empty:
     fig.update_yaxes(title_text="bpm", row=2, col=1)
     fig.update_yaxes(title_text="Watts", row=3, col=1)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # =============================================================================
 # Stimulus Analysis Tables
@@ -272,11 +272,11 @@ with col1:
             'gate1_active', 'gate2_active', 'gate3_active'
         ]].copy()
         
-        styled_df = display_df.style.applymap(
+        styled_df = display_df.style.map(
             color_conf, subset=['confidence']
         )
         
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, width="stretch", hide_index=True)
     else:
         st.info("No interval data available.")
 
@@ -296,7 +296,7 @@ with col2:
                 'RR (br/min)': '{:.1f}',
                 'HR Drop': '{:+.1f}'
             }), 
-            use_container_width=True, 
+            width="stretch", 
             hide_index=True
         )
 

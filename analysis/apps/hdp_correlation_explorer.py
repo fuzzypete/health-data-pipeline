@@ -326,7 +326,7 @@ def main():
 
         # Create and display chart
         fig = create_multi_axis_chart(selected_metrics, start_date, end_date)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Data table (expandable)
         with st.expander("View Raw Data"):

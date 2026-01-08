@@ -220,7 +220,7 @@ if stroke_summary:
     fig.update_yaxes(title_text="HR (bpm)", row=1, col=1)
     fig.update_yaxes(title_text="Power (W)", row=2, col=1)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # =============================================================================
 # Interval Analysis Table
@@ -252,7 +252,7 @@ if intervals:
             return 'color: #4ECDC4'
         return ''
 
-    styled_df = display_df.style.applymap(
+    styled_df = display_df.style.map(
         style_drift, subset=['HR Drift']
     ).format({
         'Start (min)': '{:.1f}',
@@ -264,7 +264,7 @@ if intervals:
         'Lactate': '{:.1f}',
     })
 
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    st.dataframe(styled_df, width="stretch", hide_index=True)
 else:
     st.info("No interval data available (single lactate reading)")
 
@@ -352,7 +352,7 @@ if len(lactate_readings) > 1:
         plot_bgcolor='rgba(0,0,0,0)',
     )
 
-    st.plotly_chart(fig_lactate, use_container_width=True)
+    st.plotly_chart(fig_lactate, width="stretch")
 
     # Lactate interpretation
     first_val = lactate_readings[0]['lactate_mmol']
