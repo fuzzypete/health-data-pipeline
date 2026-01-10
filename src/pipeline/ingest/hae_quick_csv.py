@@ -77,7 +77,7 @@ RENAME_MAP_AUTOMATION = {
     'Steps (count)': 'steps',
     'Distance (mi)': 'distance_mi',
     'Flights Climbed (count)': 'flights_climbed',
-    'Dietary Energy (kcal)': 'diet_calories_kcal',
+    'Dietary Energy (kcal)': 'calories_kcal',  # Maps to minute_facts.calories_kcal, then to daily_summary.diet_calories_kcal
     'Body Fat Percentage (%)': 'body_fat_pct',
     'Body Temperature (degF)': 'temperature_degF',
 

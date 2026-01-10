@@ -57,7 +57,7 @@ def _coerce_metric_types(df: pd.DataFrame) -> pd.DataFrame:
     ]
                 
     float_cols = [
-        "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
+        "active_energy_kcal", "basal_energy_kcal", "calories_kcal",  # calories_kcal from minute_facts
         "distance_mi", "sleep_score", "weight_lb", "body_fat_pct", "temperature_degF",
         "sleeping_wrist_temp_degf", "blood_glucose_mg_dl", "blood_oxygen_saturation_pct",
         "blood_pressure_diastolic_mmhg", "blood_pressure_systolic_mmhg",
@@ -126,7 +126,7 @@ def _build_daily_summary(
 
     daily_pick_cols = [
         "steps", "distance_mi", "flights_climbed",
-        "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
+        "active_energy_kcal", "basal_energy_kcal", "calories_kcal",  # calories_kcal in minute_facts -> diet_calories_kcal in daily_summary
         "sleep_minutes_asleep", "sleep_minutes_in_bed", "sleep_score",
         "weight_lb", "body_fat_pct", "temperature_degF",
         "resting_hr_bpm", "hrv_ms", "respiratory_rate_count_min", # Note: 'respiratory_rate_bpm' in schema
@@ -143,7 +143,7 @@ def _build_daily_summary(
     # Columns that should be SUMMED (cumulative daily totals from minute-level data)
     # These MUST use sum aggregation, not midnight row values
     sum_cols = {"steps", "flights_climbed", "distance_mi",
-                "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
+                "active_energy_kcal", "basal_energy_kcal", "calories_kcal",  # calories_kcal -> diet_calories_kcal
                 "sleep_minutes_asleep", "sleep_minutes_in_bed",
                 "protein_g", "carbs_g", "fat_g"}
 
@@ -165,6 +165,10 @@ def _build_daily_summary(
 
     # Rename grouping key to canonical 'date' for schema
     out = out.rename(columns={"date_group": "date"})
+
+    # Rename calories_kcal (minute_facts) to diet_calories_kcal (daily_summary)
+    if "calories_kcal" in out.columns:
+        out = out.rename(columns={"calories_kcal": "diet_calories_kcal"})
 
     # For non-sum columns only, prefer midnight row values if available
     # (point-in-time measurements like weight, body_fat, resting_hr)
@@ -198,7 +202,7 @@ def _build_daily_summary(
     if {"sleep_minutes_asleep", "sleep_minutes_in_bed"}.issubset(out.columns):
         denom = out["sleep_minutes_in_bed"].replace({0: np.nan})
         out["sleep_efficiency_pct"] = (out["sleep_minutes_asleep"] / denom * 100).round(1)
-    if {"calories_kcal", "energy_total_kcal"}.issubset(out.columns):
+    if {"diet_calories_kcal", "energy_total_kcal"}.issubset(out.columns):
         out["net_energy_kcal"] = (out["diet_calories_kcal"] - out["energy_total_kcal"]).round(0)
 
     out = add_lineage_fields(out, source_value, ingest_run_id)
@@ -206,6 +210,10 @@ def _build_daily_summary(
     out = out.loc[out[metric_cols].notna().any(axis=1)].copy()
     if out.empty:
         return None
+
+    # Map 'date' (local aggregation key) to 'date_utc' (schema field name)
+    if "date" in out.columns and "date_utc" not in out.columns:
+        out = out.rename(columns={"date": "date_utc"})
 
     if DAILY_SUMMARY_SCHEMA is not None:
         for name in DAILY_SUMMARY_SCHEMA.names:
@@ -215,11 +223,9 @@ def _build_daily_summary(
                 out[name] = None
         out = out[DAILY_SUMMARY_SCHEMA.names]
 
-    # Partition by the new local 'date' column
-    # Since 'date' is already YYYY-MM-DD object, we can just cast to string
-    # create_date_partition_column is usually for timestamps, but here we have the date.
-    # We can just ensure it's a string.
-    out["date"] = out["date"].astype(str)
+    # Create the 'date' partition column from date_utc for Hive partitioning
+    # The date_utc column is the date object, we need a string 'date' column for partitioning
+    out["date"] = out["date_utc"].astype(str)
     
     # We don't need create_date_partition_column anymore as we built 'date' manually
     # But write_partitioned_dataset expects it.
