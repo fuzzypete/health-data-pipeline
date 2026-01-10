@@ -480,7 +480,7 @@ deploy.refresh:
 	@echo "--- Refreshing deploy/data from Data/Parquet ---"
 	@rm -rf deploy/data/workouts deploy/data/cardio_splits deploy/data/resistance_sets \
 		deploy/data/oura_summary deploy/data/labs deploy/data/lactate deploy/data/protocol_history \
-		deploy/data/cardio_strokes
+		deploy/data/cardio_strokes deploy/data/daily_summary
 	@mkdir -p deploy/data
 	@cp -r Data/Parquet/workouts deploy/data/
 	@cp -r Data/Parquet/cardio_splits deploy/data/
@@ -493,6 +493,7 @@ deploy.refresh:
 	@cp -r Data/Parquet/polar_sessions deploy/data/
 	@cp -r Data/Parquet/polar_rr deploy/data/
 	@cp -r Data/Parquet/polar_respiratory deploy/data/
+	@if [ -d "Data/Parquet/daily_summary" ]; then cp -r Data/Parquet/daily_summary deploy/data/; fi
 	@# Copy latest weekly report if exists
 	@latest_report=$$(ls -t analysis/outputs/weekly_report_*.md 2>/dev/null | head -1); \
 	if [ -n "$$latest_report" ]; then \
