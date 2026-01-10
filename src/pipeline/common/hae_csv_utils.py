@@ -22,6 +22,8 @@ from pipeline.common.schema import get_schema
 from pipeline.common.timestamps import apply_strategy_a
 from pipeline.common.parquet_io import (
     write_partitioned_dataset,
+    upsert_by_key,
+    read_partitioned_dataset,
     add_lineage_fields,
     create_date_partition_column,
 )
@@ -120,55 +122,57 @@ def _build_daily_summary(
     ]
     daily_pick_cols = [c for c in daily_pick_cols if c in df.columns]
 
-    parts = []
+    def safe_sum(x):
+        return x.sum() if x.notna().any() else np.nan
 
-    if "timestamp_local" in df.columns:
+    def safe_mean(x):
+        return x.mean() if x.notna().any() else np.nan
+
+    # Columns that should be SUMMED (cumulative daily totals from minute-level data)
+    # These MUST use sum aggregation, not midnight row values
+    sum_cols = {"steps", "flights_climbed", "distance_mi",
+                "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
+                "sleep_minutes_asleep", "sleep_minutes_in_bed",
+                "protein_g", "carbs_g", "fat_g"}
+
+    # Build aggregate for all columns
+    agg_map = {}
+    for c in daily_pick_cols:
+        if c not in df.columns: continue
+        if c in sum_cols:
+            agg_map[c] = safe_sum
+        else:
+            agg_map[c] = safe_mean
+
+    g = df.groupby("date_utc", as_index=False)
+    if not agg_map:
+        log.warning("No daily summary data could be built (no aggregable columns)")
+        return None
+
+    out = g.agg(agg_map)
+
+    # For non-sum columns only, prefer midnight row values if available
+    # (point-in-time measurements like weight, body_fat, resting_hr)
+    midnight_cols = [c for c in daily_pick_cols if c not in sum_cols]
+    if midnight_cols and "timestamp_local" in df.columns:
         ts_local = pd.to_datetime(df["timestamp_local"], errors="coerce", utc=False)
         df["time_local"] = ts_local.dt.time
         midnight_mask = df["time_local"] == dtime(0, 0)
         midnight_df = df.loc[midnight_mask]
         if not midnight_df.empty:
             midnight_df = midnight_df.groupby("date_utc").first().reset_index()
-            parts.append(midnight_df[["date_utc"] + daily_pick_cols])
-
-    def safe_max(x):
-        return x.max() if x.notna().any() else np.nan
-        
-    def safe_mean(x):
-        return x.mean() if x.notna().any() else np.nan
-
-    agg_map = {}
-    for c in daily_pick_cols:
-        if c not in df.columns: continue
-        if c in {"steps", "flights_climbed", "distance_mi",
-                "active_energy_kcal", "basal_energy_kcal", "diet_calories_kcal",
-                "sleep_minutes_asleep", "sleep_minutes_in_bed",
-                "protein_g", "carbs_g", "fat_g"}:
-            agg_map[c] = safe_max
-        else:
-            agg_map[c] = safe_mean
-
-    g = df.groupby("date_utc", as_index=False)
-    if agg_map:
-        fallback = g.agg(agg_map)
-        parts.append(fallback)
-
-    if not parts:
-        log.warning("No daily summary data could be built (no midnight row or aggregable data)")
-        return None
-
-    out = parts[0]
-    for p in parts[1:]:
-        out = out.merge(p, on="date_utc", how="outer", suffixes=("", "_fb"))
-    for c in daily_pick_cols:
-        if c in out.columns and f"{c}_fb" in out.columns:
-            out[c] = out[c].where(out[c].notna(), out[f"{c}_fb"])
-            out = out.drop(columns=[f"{c}_fb"])
+            midnight_df = midnight_df[["date_utc"] + midnight_cols]
+            out = out.merge(midnight_df, on="date_utc", how="left", suffixes=("", "_mid"))
+            for c in midnight_cols:
+                if f"{c}_mid" in out.columns:
+                    # Prefer midnight value if available
+                    out[c] = out[f"{c}_mid"].where(out[f"{c}_mid"].notna(), out[c])
+                    out = out.drop(columns=[f"{c}_mid"])
 
     w = _find_water_fl_oz(df)
     if w is not None:
         wdf = pd.DataFrame({"date_utc": df["date_utc"], "water_fl_oz": w})
-        wagg = wdf.groupby("date_utc", as_index=False)["water_fl_oz"].max(min_count=1)
+        wagg = wdf.groupby("date_utc", as_index=False)["water_fl_oz"].sum(min_count=1)
         out = out.merge(wagg, on="date_utc", how="left")
 
     if {"active_energy_kcal", "basal_energy_kcal"}.issubset(out.columns):
@@ -255,32 +259,46 @@ def _log_daily_summary_written(daily_tbl: pa.Table) -> None:
     except Exception as e:
         log.warning("daily_summary: summary failed: %s", e)
 
-def _process_minute_facts(df: pd.DataFrame, source_value: str, ingest_run_id: str) -> None:
+def _process_minute_facts(df: pd.DataFrame, source_value: str, ingest_run_id: str) -> list:
     """
-    Process and write minute-level data.
+    Process and write minute-level data using upsert to accumulate data.
+
+    Returns:
+        List of affected date strings (YYYY-MM-DD) for rebuilding daily_summary.
     """
     df = add_lineage_fields(df, source_value, ingest_run_id)
     df = create_date_partition_column(df, 'timestamp_utc', 'date', 'D')
-    
-    write_partitioned_dataset(
+
+    # Get affected dates before writing
+    affected_dates = df['date'].unique().tolist()
+
+    # Use upsert to ACCUMULATE minute data (not replace)
+    # Primary key is timestamp_utc + source - same minute from same source = update
+    upsert_by_key(
         df,
         MINUTE_FACTS_PATH,
+        primary_key=['timestamp_utc', 'source'],
         partition_cols=['date', 'source'],
         schema=MINUTE_FACTS_SCHEMA,
-        mode='delete_matching' # <-- THIS IS THE FIX
     )
+
+    return affected_dates
 
 
 def run_hae_csv_pipeline(
-    csv_path: Path, 
-    df: pd.DataFrame, 
-    source_value: str, 
+    csv_path: Path,
+    df: pd.DataFrame,
+    source_value: str,
     ingest_run_id: str,
     home_timezone: str
 ) -> None:
     """
     The common "Load" pipeline for HAE CSV data.
-    
+
+    This pipeline ACCUMULATES minute data across multiple files and rebuilds
+    daily_summary from the complete accumulated data. This ensures partial-day
+    exports eventually produce complete daily totals.
+
     Args:
         csv_path: The path to the original CSV file (for logging).
         df: The pre-loaded and pre-transformed DataFrame.
@@ -293,26 +311,75 @@ def run_hae_csv_pipeline(
         df = _coerce_metric_types(df)
 
         minute_df = df.copy()
-        daily_df = df
 
         _log_minute_summary(csv_path, minute_df)
-        _process_minute_facts(minute_df, source_value, ingest_run_id)
 
-        daily_tbl = _build_daily_summary(daily_df, source_value=source_value, ingest_run_id=ingest_run_id)
-        if daily_tbl is not None:
-            write_partitioned_dataset(
-                daily_tbl,
-                DAILY_SUMMARY_PATH,
-                partition_cols=['date', 'source'],
-                schema=DAILY_SUMMARY_SCHEMA,
-                mode='delete_matching'
+        # Process minute facts with upsert (accumulates data)
+        affected_dates = _process_minute_facts(minute_df, source_value, ingest_run_id)
+        log.info("OK: %s → %s (affected dates: %s)", csv_path.name, MINUTE_FACTS_PATH, affected_dates)
+
+        # Rebuild daily_summary from ACCUMULATED minute_facts (not just this file)
+        if affected_dates:
+            _rebuild_daily_summary_from_minutes(
+                affected_dates,
+                source_value,
+                ingest_run_id
             )
-            _log_daily_summary_written(daily_tbl)
-            log.info("OK: %s → %s (daily_summary written)", csv_path.name, DAILY_SUMMARY_PATH)
         else:
-            log.info("OK: %s → %s (daily_summary skipped: no metrics)", csv_path.name, DAILY_SUMMARY_PATH)
+            log.info("OK: %s → daily_summary skipped (no affected dates)", csv_path.name)
 
-        log.info("OK: %s → %s", csv_path.name, MINUTE_FACTS_PATH)
     except Exception as e:
         log.error("Failed on %s: %s", csv_path, e, exc_info=True)
         raise
+
+
+def _rebuild_daily_summary_from_minutes(
+    affected_dates: list,
+    source_value: str,
+    ingest_run_id: str
+) -> None:
+    """
+    Rebuild daily_summary for affected dates from accumulated minute_facts.
+
+    This ensures partial exports eventually produce complete daily totals
+    as more data accumulates in minute_facts.
+    """
+    # Build DNF filter: (date in affected_dates) AND (source = source_value)
+    # DNF format: OR across list items, use ('and', ...) for compound AND clauses
+    # Each item: ('and', ('date', '=', d), ('source', '=', s))
+    filters = [
+        ('and', ('date', '=', d), ('source', '=', source_value))
+        for d in affected_dates
+    ]
+
+    # Read accumulated minute data for affected dates
+    try:
+        minute_df = read_partitioned_dataset(
+            MINUTE_FACTS_PATH,
+            filters=filters,
+        )
+    except Exception as e:
+        log.warning("Could not read minute_facts for rebuild: %s", e)
+        return
+
+    if minute_df.empty:
+        log.warning("No minute data found for affected dates, skipping daily_summary rebuild")
+        return
+
+    log.info("Rebuilding daily_summary from %d accumulated minutes for %d dates",
+             len(minute_df), len(affected_dates))
+
+    # Build daily summary from complete accumulated data
+    daily_tbl = _build_daily_summary(minute_df, source_value=source_value, ingest_run_id=ingest_run_id)
+
+    if daily_tbl is not None:
+        write_partitioned_dataset(
+            daily_tbl,
+            DAILY_SUMMARY_PATH,
+            partition_cols=['date', 'source'],
+            schema=DAILY_SUMMARY_SCHEMA,
+            mode='delete_matching'  # OK to replace - we have complete data now
+        )
+        _log_daily_summary_written(daily_tbl)
+    else:
+        log.warning("daily_summary rebuild produced no data")
