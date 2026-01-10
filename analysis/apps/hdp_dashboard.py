@@ -62,14 +62,18 @@ from utils.queries import (
     get_glucose_data,
     get_latest_ferritin,
     get_max_hr_7d,
+    get_nutrition_score_data,
     get_recovery_score_data,
     get_vitals_score_data,
     get_weekly_training_volume,
+    query_apple_health_energy,
+    query_exercise_calories,
     query_ferritin,
     query_hrv_data,
     query_labs,
     query_lactate,
     query_lift_maxes,
+    query_nutrition_summary,
     query_oura_summary,
     query_workouts,
     query_zone2_workouts,
@@ -79,6 +83,11 @@ from utils.scores import (
     calculate_recovery_score,
     calculate_vitals_score,
     calc_glucose_score,
+)
+from utils.energy_balance import (
+    WeeklyEnergyBalance,
+    CardioSession,
+    format_target_summary,
 )
 
 # =============================================================================
@@ -850,6 +859,182 @@ def render_metabolic_section(start_date: datetime, end_date: datetime):
 
 
 # =============================================================================
+# Nutrition & Energy Section
+# =============================================================================
+
+
+def render_nutrition_section(start_date: datetime, end_date: datetime):
+    """Render nutrition and energy balance section."""
+    with st.expander("Nutrition & Energy", expanded=False):
+        # Get nutrition data
+        data = get_nutrition_score_data()
+        nutrition_df = query_nutrition_summary(start_date, end_date)
+        energy_df = query_apple_health_energy(start_date, end_date)
+        exercise_df = query_exercise_calories(start_date, end_date)
+
+        # Weekly summary metrics
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            if data.get("weekly_avg_intake"):
+                target = data.get("target_calories", 2400)
+                delta = data["weekly_avg_intake"] - target
+                st.metric(
+                    "Weekly Avg Intake",
+                    f"{data['weekly_avg_intake']:.0f} kcal",
+                    delta=f"{delta:+.0f} vs target",
+                    delta_color="normal" if abs(delta) < 200 else "inverse",
+                )
+            else:
+                st.metric("Weekly Avg Intake", "No data")
+
+        with col2:
+            if data.get("weekly_avg_protein"):
+                target = data.get("target_protein", 155)
+                delta = data["weekly_avg_protein"] - target
+                st.metric(
+                    "Avg Protein",
+                    f"{data['weekly_avg_protein']:.0f}g",
+                    delta=f"{delta:+.0f}g vs target",
+                )
+            else:
+                st.metric("Avg Protein", "No data")
+
+        with col3:
+            complete = data.get("complete_days", 0)
+            st.metric(
+                "Logging Streak",
+                f"{complete}/7 days",
+                delta="Complete" if complete >= 5 else "Incomplete",
+                delta_color="normal" if complete >= 5 else "inverse",
+            )
+
+        # Nutrition trend chart
+        if not nutrition_df.empty and "calories" in nutrition_df.columns:
+            # Filter to rows with calorie data
+            chart_df = nutrition_df[nutrition_df["calories"].notna()].copy()
+
+            if not chart_df.empty:
+                st.markdown("#### Calorie & Protein Trend")
+
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                # Calories (primary axis)
+                fig.add_trace(
+                    go.Scatter(
+                        x=chart_df["date"],
+                        y=chart_df["calories"],
+                        mode="lines+markers",
+                        name="Calories",
+                        line=dict(color=COLORS.get("primary", "#4ECDC4"), width=2),
+                        marker=dict(size=6),
+                    ),
+                    secondary_y=False,
+                )
+
+                # Calorie target line
+                fig.add_hline(
+                    y=data.get("target_calories", 2400),
+                    line_dash="dash",
+                    line_color=COLORS.get("optimal", "#32CD32"),
+                    annotation_text="Target",
+                    secondary_y=False,
+                )
+
+                # Protein (secondary axis)
+                if "protein_g" in chart_df.columns:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=chart_df["date"],
+                            y=chart_df["protein_g"],
+                            mode="lines+markers",
+                            name="Protein (g)",
+                            line=dict(color=COLORS.get("recovery", "#FF6B6B"), width=2, dash="dot"),
+                            marker=dict(size=5),
+                        ),
+                        secondary_y=True,
+                    )
+
+                fig.update_layout(
+                    template="plotly_dark",
+                    height=250,
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                )
+                fig.update_xaxes(tickangle=-45, nticks=8)
+                fig.update_yaxes(title_text="Calories", secondary_y=False)
+                fig.update_yaxes(title_text="Protein (g)", secondary_y=True)
+
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Energy expenditure from Apple Health
+        if not energy_df.empty:
+            st.markdown("#### Energy Expenditure (Apple Health)")
+
+            col1, col2 = st.columns(2)
+
+            # Last 7 days average
+            recent_energy = energy_df.tail(7)
+            avg_total = recent_energy["total_energy_kcal"].mean() if not recent_energy.empty else 0
+            avg_basal = recent_energy["basal_energy_kcal"].mean() if "basal_energy_kcal" in recent_energy.columns else 0
+            avg_active = recent_energy["active_energy_kcal"].mean() if "active_energy_kcal" in recent_energy.columns else 0
+
+            with col1:
+                st.metric("7d Avg TDEE", f"{avg_total:.0f} kcal")
+            with col2:
+                st.metric("Basal / Active", f"{avg_basal:.0f} / {avg_active:.0f}")
+
+        # Weekly Target Calculator
+        with st.expander("Calculate Weekly Target"):
+            st.markdown("Plan your week's training and get a personalized calorie target.")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                zone2_sessions = st.number_input("Zone 2 sessions", 0, 7, 3, key="z2_sessions")
+                zone2_duration = st.number_input("Avg duration (min)", 20, 90, 45, key="z2_duration")
+                strength_sessions = st.number_input("Strength sessions", 0, 6, 2, key="str_sessions")
+
+            with col2:
+                vo2_sessions = st.number_input("VO2max sessions", 0, 3, 0, key="vo2_sessions")
+                vo2_duration = st.number_input("VO2 duration (min)", 10, 45, 20, key="vo2_duration")
+                goal = st.selectbox(
+                    "Goal",
+                    ["Maintenance", "Cut (-300)", "Lean Bulk (+200)"],
+                    key="goal_select",
+                )
+
+            # Build session list
+            cardio_sessions = []
+            for _ in range(int(zone2_sessions)):
+                cardio_sessions.append(CardioSession("zone2", int(zone2_duration)))
+            for _ in range(int(vo2_sessions)):
+                cardio_sessions.append(CardioSession("vo2max", int(vo2_duration)))
+
+            # Map goal selection
+            goal_map = {
+                "Maintenance": "maintenance",
+                "Cut (-300)": "cut",
+                "Lean Bulk (+200)": "lean_bulk",
+            }
+
+            # Calculate target
+            calculator = WeeklyEnergyBalance()
+            target = calculator.calculate_week_target(
+                cardio_sessions=cardio_sessions,
+                strength_sessions=int(strength_sessions),
+                goal=goal_map.get(goal, "maintenance"),
+            )
+
+            # Display result
+            st.markdown("---")
+            st.markdown(format_target_summary(target))
+
+
+# =============================================================================
 # Recovery Section
 # =============================================================================
 
@@ -1255,6 +1440,7 @@ def main():
     # Main sections
     render_cardiovascular_section(start_date, end_date)
     render_metabolic_section(start_date, end_date)
+    render_nutrition_section(start_date, end_date)
     render_recovery_section(start_date, end_date)
     render_strength_section(start_date, end_date)
     render_weekly_coach_section()

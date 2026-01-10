@@ -1788,6 +1788,326 @@ def calculate_cardiac_drift(stroke_df: pd.DataFrame, workout_duration_min: float
     }
 
 
+# =============================================================================
+# Nutrition & Energy Balance Queries
+# =============================================================================
+
+
+@st.cache_data(ttl=3600)
+def query_nutrition_summary(
+    start_date: datetime,
+    end_date: datetime,
+) -> pd.DataFrame:
+    """Query daily nutrition data with completeness flags.
+
+    Implements multi-factor completeness heuristic:
+    - Hard limits: calories between 1000-5000
+    - Protein sanity check: >= 80g for someone lifting
+    - Contextual check: >= 60% of 30-day rolling average
+
+    Returns DataFrame with columns:
+    - date, calories, protein_g, carbs_g, total_fat_g, weight_lb
+    - cal_30d_avg, is_complete
+    """
+    conn = get_connection()
+
+    query = f"""
+    WITH daily AS (
+        SELECT
+            date_utc as date,
+            diet_calories_kcal as calories,
+            protein_g,
+            carbs_g,
+            total_fat_g,
+            weight_lb,
+            body_fat_pct
+        FROM read_parquet('{_parquet_path("daily_summary")}')
+        WHERE date_utc BETWEEN '{start_date.date()}' AND '{end_date.date()}'
+    ),
+    rolling AS (
+        SELECT
+            *,
+            AVG(calories) OVER (
+                ORDER BY date
+                ROWS BETWEEN 30 PRECEDING AND 1 PRECEDING
+            ) as cal_30d_avg
+        FROM daily
+    )
+    SELECT
+        *,
+        CASE
+            WHEN calories IS NULL THEN FALSE
+            WHEN calories < 1000 OR calories > 5000 THEN FALSE
+            WHEN protein_g IS NOT NULL AND protein_g < 80 THEN FALSE
+            WHEN cal_30d_avg IS NOT NULL AND calories < cal_30d_avg * 0.6 THEN FALSE
+            ELSE TRUE
+        END as is_complete
+    FROM rolling
+    ORDER BY date
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying nutrition summary: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_exercise_calories(
+    start_date: datetime,
+    end_date: datetime,
+) -> pd.DataFrame:
+    """Calculate exercise calories from actual power data.
+
+    Uses actual power (watts) from cardio_strokes for accurate cardio burn.
+    Estimates strength training at ~200 kcal per session.
+
+    Conversion: kcal = watts * minutes * 0.065 (approx for cycling)
+    """
+    conn = get_connection()
+
+    query = f"""
+    WITH cardio AS (
+        SELECT
+            DATE_TRUNC('day', workout_start_utc)::DATE as date,
+            SUM(watts * (time_cumulative_s / 60.0) * 0.065) as cardio_kcal
+        FROM read_parquet('{_parquet_path("cardio_strokes")}')
+        WHERE workout_start_utc BETWEEN '{start_date.isoformat()}' AND '{end_date.isoformat()}'
+        GROUP BY 1
+    ),
+    strength AS (
+        SELECT
+            DATE_TRUNC('day', workout_start_utc)::DATE as date,
+            COUNT(DISTINCT workout_id) * 200 as strength_kcal
+        FROM read_parquet('{_parquet_path("resistance_sets")}')
+        WHERE workout_start_utc BETWEEN '{start_date.isoformat()}' AND '{end_date.isoformat()}'
+        GROUP BY 1
+    )
+    SELECT
+        COALESCE(c.date, s.date) as date,
+        COALESCE(c.cardio_kcal, 0) as cardio_kcal,
+        COALESCE(s.strength_kcal, 0) as strength_kcal,
+        COALESCE(c.cardio_kcal, 0) + COALESCE(s.strength_kcal, 0) as total_exercise_kcal
+    FROM cardio c
+    FULL OUTER JOIN strength s ON c.date = s.date
+    ORDER BY date
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying exercise calories: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_apple_health_energy(
+    start_date: datetime,
+    end_date: datetime,
+) -> pd.DataFrame:
+    """Query Apple Health energy data (basal + active).
+
+    Returns daily totals from daily_summary.
+    """
+    conn = get_connection()
+
+    query = f"""
+    SELECT
+        date_utc as date,
+        basal_energy_kcal,
+        active_energy_kcal,
+        COALESCE(basal_energy_kcal, 0) + COALESCE(active_energy_kcal, 0) as total_energy_kcal
+    FROM read_parquet('{_parquet_path("daily_summary")}')
+    WHERE date_utc BETWEEN '{start_date.date()}' AND '{end_date.date()}'
+      AND (basal_energy_kcal IS NOT NULL OR active_energy_kcal IS NOT NULL)
+    ORDER BY date_utc
+    """
+
+    try:
+        return conn.execute(query).df()
+    except Exception as e:
+        st.warning(f"Error querying Apple Health energy: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def query_implied_tdee(
+    start_date: datetime,
+    end_date: datetime,
+    min_complete_days: int = 14,
+) -> dict | None:
+    """Calculate implied TDEE from weight change and calorie intake.
+
+    Formula: Actual TDEE = Avg Intake - (Weight Change × 3500 kcal/lb) / Days
+
+    Args:
+        start_date: Start of analysis period
+        end_date: End of analysis period
+        min_complete_days: Minimum complete nutrition days required
+
+    Returns dict with:
+    - implied_tdee: Calculated TDEE
+    - avg_intake: Average daily calorie intake
+    - weight_change_lb: Weight change over period
+    - days_analyzed: Number of days in analysis
+    - complete_days: Days with complete nutrition data
+    """
+    conn = get_connection()
+
+    # Get nutrition data with completeness flags
+    nutrition_df = query_nutrition_summary(start_date, end_date)
+
+    if nutrition_df.empty:
+        return None
+
+    # Filter to complete days only
+    complete_df = nutrition_df[nutrition_df["is_complete"] == True]
+
+    if len(complete_df) < min_complete_days:
+        return {
+            "implied_tdee": None,
+            "avg_intake": None,
+            "weight_change_lb": None,
+            "days_analyzed": (end_date - start_date).days,
+            "complete_days": len(complete_df),
+            "error": f"Insufficient data: {len(complete_df)} complete days (need {min_complete_days})",
+        }
+
+    # Get weight at start and end of period
+    weight_query = f"""
+    WITH first_weight AS (
+        SELECT weight_lb as start_weight
+        FROM read_parquet('{_parquet_path("daily_summary")}')
+        WHERE date_utc >= '{start_date.date()}'
+          AND weight_lb IS NOT NULL
+        ORDER BY date_utc
+        LIMIT 1
+    ),
+    last_weight AS (
+        SELECT weight_lb as end_weight
+        FROM read_parquet('{_parquet_path("daily_summary")}')
+        WHERE date_utc <= '{end_date.date()}'
+          AND weight_lb IS NOT NULL
+        ORDER BY date_utc DESC
+        LIMIT 1
+    )
+    SELECT
+        (SELECT start_weight FROM first_weight) as start_weight,
+        (SELECT end_weight FROM last_weight) as end_weight
+    """
+
+    try:
+        weight_df = conn.execute(weight_query).df()
+        if weight_df.empty or weight_df.iloc[0]["start_weight"] is None:
+            return {
+                "implied_tdee": None,
+                "avg_intake": complete_df["calories"].mean(),
+                "weight_change_lb": None,
+                "days_analyzed": (end_date - start_date).days,
+                "complete_days": len(complete_df),
+                "error": "Missing weight data",
+            }
+
+        start_weight = weight_df.iloc[0]["start_weight"]
+        end_weight = weight_df.iloc[0]["end_weight"]
+        weight_change = end_weight - start_weight
+
+        # Calculate implied TDEE
+        days = (end_date - start_date).days
+        avg_intake = complete_df["calories"].mean()
+
+        # 1 lb = 3500 kcal
+        implied_tdee = avg_intake - (weight_change * 3500 / days)
+
+        return {
+            "implied_tdee": round(implied_tdee, 0),
+            "avg_intake": round(avg_intake, 0),
+            "weight_change_lb": round(weight_change, 2),
+            "start_weight": round(start_weight, 1),
+            "end_weight": round(end_weight, 1),
+            "days_analyzed": days,
+            "complete_days": len(complete_df),
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@st.cache_data(ttl=1800)
+def get_nutrition_score_data() -> dict:
+    """Get nutrition data for dashboard display.
+
+    Returns dict with:
+    - weekly_avg_intake: 7-day average calorie intake
+    - weekly_avg_protein: 7-day average protein
+    - complete_days: Days with complete logging in past 7
+    - target_calories: Recommended daily target
+    - target_protein: Recommended protein target
+    - trend: Daily values for chart
+    """
+    conn = get_connection()
+    result = {}
+
+    # 7-day averages (complete days only)
+    try:
+        weekly_query = f"""
+        WITH daily AS (
+            SELECT
+                date_utc as date,
+                diet_calories_kcal as calories,
+                protein_g,
+                CASE
+                    WHEN diet_calories_kcal IS NULL THEN FALSE
+                    WHEN diet_calories_kcal < 1000 OR diet_calories_kcal > 5000 THEN FALSE
+                    ELSE TRUE
+                END as is_complete
+            FROM read_parquet('{_parquet_path("daily_summary")}')
+            WHERE date_utc >= CURRENT_DATE - INTERVAL '7 days'
+        )
+        SELECT
+            ROUND(AVG(CASE WHEN is_complete THEN calories END), 0) as avg_calories,
+            ROUND(AVG(CASE WHEN is_complete THEN protein_g END), 0) as avg_protein,
+            SUM(CASE WHEN is_complete THEN 1 ELSE 0 END) as complete_days
+        FROM daily
+        """
+        df = conn.execute(weekly_query).df()
+        if not df.empty:
+            result["weekly_avg_intake"] = df.iloc[0]["avg_calories"]
+            result["weekly_avg_protein"] = df.iloc[0]["avg_protein"]
+            result["complete_days"] = int(df.iloc[0]["complete_days"]) if df.iloc[0]["complete_days"] else 0
+        else:
+            result["weekly_avg_intake"] = None
+            result["weekly_avg_protein"] = None
+            result["complete_days"] = 0
+    except Exception:
+        result["weekly_avg_intake"] = None
+        result["weekly_avg_protein"] = None
+        result["complete_days"] = 0
+
+    # Default targets (personalized for Peter)
+    result["target_calories"] = 2400  # Moderate training week
+    result["target_protein"] = 155  # ~1g/lb bodyweight
+
+    # 30-day trend for chart
+    try:
+        trend_query = f"""
+        SELECT
+            date_utc as date,
+            diet_calories_kcal as calories,
+            protein_g
+        FROM read_parquet('{_parquet_path("daily_summary")}')
+        WHERE date_utc >= CURRENT_DATE - INTERVAL '30 days'
+        ORDER BY date_utc
+        """
+        df = conn.execute(trend_query).df()
+        result["trend"] = df.to_dict("records") if not df.empty else []
+    except Exception:
+        result["trend"] = []
+
+    return result
+
+
 @st.cache_data(ttl=3600)
 def get_zone2_workout_analysis(workout_id: str) -> dict:
     """

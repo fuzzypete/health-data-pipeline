@@ -12,7 +12,7 @@
 | Strength | `resistance_sets` | Sets, reps, weight | Excellent |
 | Recovery | `oura_summary` | `readiness_score`, `sleep_score` | Good |
 | Protocols | `protocol_history` | Compounds, dosages | Good (affects weight interpretation) |
-| Apple Health | `daily_summary` | `basal_energy_kcal`, `active_energy_kcal` | **CORRUPTED - units issue** |
+| Apple Health | `daily_summary` | `basal_energy_kcal`, `active_energy_kcal` | **FIXED** - now summing correctly |
 
 ### Key Findings from Your Data
 
@@ -269,24 +269,30 @@ def query_exercise_calories(start_date: datetime, end_date: datetime) -> pd.Data
 
 ## Implementation Steps
 
-1. **Fix Apple Health units issue** (optional, low priority)
-   - Investigate HAE ingestion for energy columns
-   - Likely a unit conversion missing (Mcal vs kcal)
+1. ~~**Fix Apple Health units issue**~~ ✅ DONE
+   - Fixed in `hae_csv_utils.py` - was using `max()` instead of `sum()` for minute aggregation
+   - Also fixed data accumulation with upsert + rebuild from minutes
 
-2. **Add query functions to `utils/queries.py`**
+2. ~~**Add query functions to `utils/queries.py`**~~ ✅ DONE
    - `query_nutrition_summary()` - with completeness flags
    - `query_exercise_calories()` - from power data
    - `query_implied_tdee()` - from weight + intake
+   - `query_apple_health_energy()` - TDEE from Apple Health
+   - `get_nutrition_score_data()` - for dashboard display
 
-3. **Create `utils/energy_balance.py`**
+3. ~~**Create `utils/energy_balance.py`**~~ ✅ DONE
    - `WeeklyEnergyBalance` class
    - `calculate_weekly_target()` function
-   - Incomplete day detection heuristics
+   - `quick_estimate()` for pre-calculated TDEE levels
+   - Incomplete day detection heuristics (`detect_incomplete_days()`)
+   - Helper functions for formatting and calculations
 
-4. **Add dashboard section to `hdp_dashboard.py`**
+4. ~~**Add dashboard section to `hdp_dashboard.py`**~~ ✅ DONE
    - `render_nutrition_section()`
-   - Weekly summary metrics
-   - Interactive target calculator
+   - Weekly summary metrics (intake, protein, logging streak)
+   - Calorie & protein trend chart
+   - Apple Health TDEE display
+   - Interactive target calculator with session inputs
    - Trend visualization
 
 5. **Enhance `analyze_maintenance.py`** (optional)

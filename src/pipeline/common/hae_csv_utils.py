@@ -109,8 +109,20 @@ def _build_daily_summary(
     Build wide daily_summary per (date_utc, source) with 'midnight-row' preference.
     """
     df = df.copy()
-    ts_utc = pd.to_datetime(df["timestamp_utc"], errors="coerce", utc=True)
-    df["date_utc"] = ts_utc.dt.date
+    
+    # --- FIX: Group by LOCAL Date (Strategy A) ---
+    # Strategy A guarantees 'timestamp_local' exists and reflects the user's wall clock time.
+    # We want '2026-01-09' to mean Jan 9th Pacific, not Jan 9th UTC.
+    if "timestamp_local" in df.columns:
+        ts_local = pd.to_datetime(df["timestamp_local"], errors="coerce")
+        df["date_group"] = ts_local.dt.date
+        date_col = "date_group"
+    else:
+        # Fallback to UTC if local is missing (shouldn't happen with Strategy A)
+        log.warning("timestamp_local missing, falling back to UTC date aggregation")
+        ts_utc = pd.to_datetime(df["timestamp_utc"], errors="coerce", utc=True)
+        df["date_group"] = ts_utc.dt.date
+        date_col = "date_group"
 
     daily_pick_cols = [
         "steps", "distance_mi", "flights_climbed",
@@ -144,12 +156,15 @@ def _build_daily_summary(
         else:
             agg_map[c] = safe_mean
 
-    g = df.groupby("date_utc", as_index=False)
+    g = df.groupby("date_group", as_index=False)
     if not agg_map:
         log.warning("No daily summary data could be built (no aggregable columns)")
         return None
 
     out = g.agg(agg_map)
+
+    # Rename grouping key to canonical 'date' for schema
+    out = out.rename(columns={"date_group": "date"})
 
     # For non-sum columns only, prefer midnight row values if available
     # (point-in-time measurements like weight, body_fat, resting_hr)
@@ -160,9 +175,11 @@ def _build_daily_summary(
         midnight_mask = df["time_local"] == dtime(0, 0)
         midnight_df = df.loc[midnight_mask]
         if not midnight_df.empty:
-            midnight_df = midnight_df.groupby("date_utc").first().reset_index()
-            midnight_df = midnight_df[["date_utc"] + midnight_cols]
-            out = out.merge(midnight_df, on="date_utc", how="left", suffixes=("", "_mid"))
+            # Group midnight rows by local date too
+            midnight_df["date"] = pd.to_datetime(midnight_df["timestamp_local"]).dt.date
+            midnight_df = midnight_df.groupby("date").first().reset_index()
+            midnight_df = midnight_df[["date"] + midnight_cols]
+            out = out.merge(midnight_df, on="date", how="left", suffixes=("", "_mid"))
             for c in midnight_cols:
                 if f"{c}_mid" in out.columns:
                     # Prefer midnight value if available
@@ -171,9 +188,10 @@ def _build_daily_summary(
 
     w = _find_water_fl_oz(df)
     if w is not None:
-        wdf = pd.DataFrame({"date_utc": df["date_utc"], "water_fl_oz": w})
-        wagg = wdf.groupby("date_utc", as_index=False)["water_fl_oz"].sum(min_count=1)
-        out = out.merge(wagg, on="date_utc", how="left")
+        # Water grouping also needs to align
+        wdf = pd.DataFrame({"date": df["date_group"], "water_fl_oz": w})
+        wagg = wdf.groupby("date", as_index=False)["water_fl_oz"].sum(min_count=1)
+        out = out.merge(wagg, on="date", how="left")
 
     if {"active_energy_kcal", "basal_energy_kcal"}.issubset(out.columns):
         out["energy_total_kcal"] = (out["active_energy_kcal"].fillna(0) + out["basal_energy_kcal"].fillna(0)).round(0)
@@ -184,7 +202,7 @@ def _build_daily_summary(
         out["net_energy_kcal"] = (out["diet_calories_kcal"] - out["energy_total_kcal"]).round(0)
 
     out = add_lineage_fields(out, source_value, ingest_run_id)
-    metric_cols = [c for c in out.columns if c not in {"date_utc", "source", "ingest_time_utc", "ingest_run_id"}]
+    metric_cols = [c for c in out.columns if c not in {"date", "source", "ingest_time_utc", "ingest_run_id"}]
     out = out.loc[out[metric_cols].notna().any(axis=1)].copy()
     if out.empty:
         return None
@@ -197,7 +215,15 @@ def _build_daily_summary(
                 out[name] = None
         out = out[DAILY_SUMMARY_SCHEMA.names]
 
-    out = create_date_partition_column(out, 'date_utc', 'date', 'D')
+    # Partition by the new local 'date' column
+    # Since 'date' is already YYYY-MM-DD object, we can just cast to string
+    # create_date_partition_column is usually for timestamps, but here we have the date.
+    # We can just ensure it's a string.
+    out["date"] = out["date"].astype(str)
+    
+    # We don't need create_date_partition_column anymore as we built 'date' manually
+    # But write_partitioned_dataset expects it.
+    # Convert to PyArrow table
     table = pa.Table.from_pandas(out, preserve_index=False, schema=DAILY_SUMMARY_SCHEMA)
     return table
 

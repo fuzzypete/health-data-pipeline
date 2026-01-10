@@ -287,10 +287,10 @@ def handle_folder_sync(client: DriveClient, config: Dict[str, Any]):
         file_name = file["name"]
         output_path = output_dir / file_name
         
-        # Simple skip: if file exists, don't re-download
-        if output_path.exists():
-            log.debug(f"Skipping existing file: {file_name}")
-            continue
+        # Always re-download to ensure we capture updates (e.g. partial day -> full day)
+        # if output_path.exists():
+        #     log.debug(f"Skipping existing file: {file_name}")
+        #     continue
 
         try:
             # G-Suite files (like .gsheet) can't be "downloaded", they are 0-byte
